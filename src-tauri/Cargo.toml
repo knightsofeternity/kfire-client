@@ -24,10 +24,19 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # Local process scanning (game detection)
 sysinfo = "0.33"
-# TODO(mvp): offline queue of pending presence events
-# rusqlite = { version = "0.32", features = ["bundled"] }
-# TODO(mvp): WebSocket push to kfire-server (see kfire-protocol/websocket-events.md)
-# tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
+# Local cache: settings, games catalog, offline event queue
+rusqlite = { version = "0.32", features = ["bundled"] }
+# REST control plane (login, refresh, games download)
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+# Real-time presence push (see kfire-protocol/websocket-events.md)
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
+tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
+futures-util = "0.3"
+uuid = { version = "1", features = ["v4"] }
+chrono = { version = "0.4", features = ["serde"] }
+rand = "0.8"
+log = "0.4"
+env_logger = "0.11"
 
 [profile.release]
 strip = true
