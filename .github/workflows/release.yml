@@ -71,6 +71,9 @@ jobs:
           releaseBody: |
             KFIRE desktop client. Download the installer for your platform below.
 
+            **New in this version:** an optional "Launch at startup" toggle so KFIRE
+            runs in the background and shares your presence from boot.
+
             **On first launch:** enter your organization's KFIRE server address, then
             approve the device in the browser - no password needed.
 
