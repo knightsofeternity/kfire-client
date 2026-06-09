@@ -160,6 +160,14 @@ async fn poll_until_linked(
                         }
                     }
                     app.state::<AppState>().start_session();
+
+                    // First successful link: default to launch-at-login (set once).
+                    if db.get_setting("autostart_configured").is_none() {
+                        use tauri_plugin_autostart::ManagerExt;
+                        if app.autolaunch().enable().is_ok() {
+                            db.set_setting("autostart_configured", "1");
+                        }
+                    }
                 }
                 return;
             }
@@ -189,6 +197,33 @@ async fn logout(state: tauri::State<'_, AppState>) -> Result<(), String> {
 
     state.db.delete_setting("refresh_token");
     state.db.delete_setting("username");
+    Ok(())
+}
+
+/// Whether the app is registered to launch at login.
+#[tauri::command]
+fn get_autostart(app: tauri::AppHandle) -> Result<bool, String> {
+    use tauri_plugin_autostart::ManagerExt;
+    app.autolaunch().is_enabled().map_err(|e| e.to_string())
+}
+
+/// Register/unregister the app to launch at login. The choice is remembered so
+/// the first-link default never overrides what the user picked here.
+#[tauri::command]
+fn set_autostart(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    enabled: bool,
+) -> Result<(), String> {
+    use tauri_plugin_autostart::ManagerExt;
+    let manager = app.autolaunch();
+    let res = if enabled {
+        manager.enable()
+    } else {
+        manager.disable()
+    };
+    res.map_err(|e| e.to_string())?;
+    state.db.set_setting("autostart_configured", "1");
     Ok(())
 }
 
@@ -222,7 +257,17 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![start_link, logout, get_state])
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            None,
+        ))
+        .invoke_handler(tauri::generate_handler![
+            start_link,
+            logout,
+            get_state,
+            get_autostart,
+            set_autostart
+        ])
         .setup(|app| {
             // --- local cache -------------------------------------------------
             let data_dir = app.path().app_data_dir()?;
@@ -270,9 +315,18 @@ pub fn run() {
                 }
             });
 
-            // Auto-resume the session when we have a refresh token.
+            // Auto-resume the session when we have a refresh token. A presence
+            // app is meant to run in the background, so default to launch-at-login
+            // the first time we're linked — but only set it once, then the user's
+            // toggle (autostart_configured) is respected forever after.
             if db.get_setting("refresh_token").is_some() {
                 state.start_session();
+                if db.get_setting("autostart_configured").is_none() {
+                    use tauri_plugin_autostart::ManagerExt;
+                    if app.autolaunch().enable().is_ok() {
+                        db.set_setting("autostart_configured", "1");
+                    }
+                }
             }
             app.manage(state);
 

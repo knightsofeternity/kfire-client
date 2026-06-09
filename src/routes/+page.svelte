@@ -23,6 +23,25 @@
   let running = $state<RunningGame[]>([]);
   let status = $state<"disconnected" | "connecting" | "connected" | "logged_out">("disconnected");
   let statusDetail = $state("");
+  let autostart = $state(false);
+
+  async function refreshAutostart() {
+    try {
+      autostart = await invoke<boolean>("get_autostart");
+    } catch (e) {
+      console.warn("get_autostart failed", e);
+    }
+  }
+
+  async function toggleAutostart() {
+    const next = !autostart;
+    try {
+      await invoke("set_autostart", { enabled: next });
+      autostart = next;
+    } catch (e) {
+      error = String(e);
+    }
+  }
 
   async function refreshState() {
     const s = await invoke<UiState>("get_state");
@@ -30,7 +49,10 @@
     gamesCount = s.games_count;
     running = s.running;
     if (s.server_url && !serverUrl) serverUrl = s.server_url;
-    if (loggedIn) pairing = null;
+    if (loggedIn) {
+      pairing = null;
+      refreshAutostart();
+    }
   }
 
   onMount(() => {
@@ -104,6 +126,10 @@
       {:else}
         <ul>{#each running as game (game.slug)}<li>🎮 {game.name}</li>{/each}</ul>
       {/if}
+      <label class="toggle">
+        <input type="checkbox" checked={autostart} onchange={toggleAutostart} />
+        <span>Launch KFIRE at startup</span>
+      </label>
       <button class="secondary" onclick={logout}>Unlink this device</button>
     </section>
   {:else if pairing}
@@ -162,6 +188,8 @@
   .muted { color: #6b7280; font-size: 0.85rem; margin: 0; }
   .muted.small { font-size: 0.75rem; }
   .error { color: #ef4444; font-size: 0.85rem; margin: 0; }
+  .toggle { flex-direction: row; align-items: center; gap: 0.5rem; cursor: pointer; color: #9ca3af; font-size: 0.85rem; }
+  .toggle input { accent-color: #f97316; width: 1rem; height: 1rem; cursor: pointer; }
   footer { margin-top: auto; }
   footer p { margin: 0; font-size: 0.75rem; color: #4b5563; text-align: center; }
 </style>
