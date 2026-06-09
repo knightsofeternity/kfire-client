@@ -71,8 +71,14 @@ jobs:
           releaseBody: |
             KFIRE desktop client. Download the installer for your platform below.
 
-            On first launch: enter your organization's KFIRE server address, then
-            approve the device in the browser. No password needed.
+            **On first launch:** enter your organization's KFIRE server address, then
+            approve the device in the browser — no password needed.
+
+            **Security warning?** The installers aren't code-signed yet, so your OS may
+            warn about an "unknown publisher". The app is safe:
+            - Windows (SmartScreen): *More info* → *Run anyway*
+            - macOS (Gatekeeper): right-click the app → *Open* → *Open*
+            - Linux: no warning
           releaseDraft: false
           prerelease: false
           args: ${{ matrix.args }}
