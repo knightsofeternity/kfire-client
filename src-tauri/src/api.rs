@@ -39,6 +39,25 @@ pub struct TokenPair {
     pub expires_in: u64,
 }
 
+/// Response to starting a device-pairing flow.
+#[derive(Debug, Clone, Deserialize)]
+pub struct PairStart {
+    pub device_code: String,
+    pub user_code: String,
+    pub verification_url: String,
+    pub interval: u64,
+}
+
+/// Response to polling a pairing. `status`: pending | complete | denied | expired.
+#[derive(Debug, Clone, Deserialize)]
+pub struct PairPoll {
+    pub status: String,
+    #[serde(default)]
+    pub access_token: Option<String>,
+    #[serde(default)]
+    pub refresh_token: Option<String>,
+}
+
 #[derive(Debug, Deserialize)]
 struct ServerError {
     code: String,
@@ -117,6 +136,36 @@ impl ApiClient {
         Self::handle(
             self.http
                 .post(format!("{}/api/v1/auth/login", self.base_url))
+                .json(&body)
+                .send()
+                .await,
+        )
+        .await
+    }
+
+    /// Starts the browser device-pairing flow.
+    pub async fn start_pairing(&self, device_id: &str) -> Result<PairStart, ApiError> {
+        let body = serde_json::json!({
+            "device_id": device_id,
+            "name": device_name(),
+            "platform": platform(),
+        });
+        Self::handle(
+            self.http
+                .post(format!("{}/api/v1/devices/pair/start", self.base_url))
+                .json(&body)
+                .send()
+                .await,
+        )
+        .await
+    }
+
+    /// Polls a pairing until the user approves it in the browser.
+    pub async fn poll_pairing(&self, device_code: &str) -> Result<PairPoll, ApiError> {
+        let body = serde_json::json!({ "device_code": device_code });
+        Self::handle(
+            self.http
+                .post(format!("{}/api/v1/devices/pair/poll", self.base_url))
                 .json(&body)
                 .send()
                 .await,

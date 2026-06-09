@@ -72,42 +72,106 @@ pub struct RunningGame {
     name: String,
 }
 
+#[derive(serde::Serialize)]
+pub struct LinkInfo {
+    user_code: String,
+    verification_url: String,
+}
+
+/// Starts browser-based device linking: registers a pairing with the server,
+/// opens the browser for the user to approve, and polls in the background
+/// until tokens arrive (then starts the session).
 #[tauri::command]
-async fn login(
+async fn start_link(
+    app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
     server_url: String,
-    username: String,
-    password: String,
-) -> Result<String, String> {
+) -> Result<LinkInfo, String> {
     let api = ApiClient::new(&server_url);
     let device_id = state.db.device_id();
-
-    let tokens = api
-        .login(&username, &password, &device_id)
+    let start = api
+        .start_pairing(&device_id)
         .await
         .map_err(|e| e.to_string())?;
 
-    state.db.set_setting("server_url", &api.base_url);
-    state.db.set_setting("username", &username);
-    state.db.set_setting("refresh_token", &tokens.refresh_token);
-    *state.access_token.lock().unwrap() = Some(tokens.access_token.clone());
-
-    // Initial catalog download with the fresh access token; the WS task
-    // keeps it up to date afterwards.
-    match api.fetch_games(&tokens.access_token).await {
-        Ok(games) => {
-            if state.db.replace_games(&games).is_ok() {
-                state.scanner.load_catalog(&games);
-                state
-                    .db
-                    .set_setting("games_synced_at", &chrono::Utc::now().to_rfc3339());
-            }
-        }
-        Err(e) => log::warn!("login: games sync failed (will retry on connect): {e}"),
+    // Open the browser so the user can approve on the web app.
+    use tauri_plugin_opener::OpenerExt;
+    if let Err(e) = app
+        .opener()
+        .open_url(start.verification_url.clone(), None::<&str>)
+    {
+        log::warn!("could not open browser: {e}");
     }
 
-    state.start_session();
-    Ok(username)
+    let app2 = app.clone();
+    let base = api.base_url.clone();
+    let device_code = start.device_code.clone();
+    let interval = start.interval.max(1);
+    tauri::async_runtime::spawn(poll_until_linked(app2, base, device_code, interval));
+
+    Ok(LinkInfo {
+        user_code: start.user_code,
+        verification_url: start.verification_url,
+    })
+}
+
+/// Polls the pairing until the user approves it (or it fails), then stores the
+/// device-bound tokens and starts the presence session.
+async fn poll_until_linked(
+    app: tauri::AppHandle,
+    base: String,
+    device_code: String,
+    interval: u64,
+) {
+    use tauri::Manager;
+
+    // Clone the shared handles so we never hold a State borrow across awaits.
+    let (db, scanner, access_token, notifications) = {
+        let s = app.state::<AppState>();
+        (
+            s.db.clone(),
+            s.scanner.clone(),
+            s.access_token.clone(),
+            s.notifications.clone(),
+        )
+    };
+    let api = ApiClient::new(&base);
+
+    loop {
+        tokio::time::sleep(std::time::Duration::from_secs(interval)).await;
+        let poll = match api.poll_pairing(&device_code).await {
+            Ok(p) => p,
+            Err(e) => {
+                log::warn!("pairing poll error: {e}");
+                continue;
+            }
+        };
+        match poll.status.as_str() {
+            "pending" => continue,
+            "complete" => {
+                if let (Some(access), Some(refresh)) = (poll.access_token, poll.refresh_token) {
+                    db.set_setting("server_url", &api.base_url);
+                    db.set_setting("refresh_token", &refresh);
+                    *access_token.lock().unwrap() = Some(access.clone());
+                    if let Ok(games) = api.fetch_games(&access).await {
+                        if db.replace_games(&games).is_ok() {
+                            scanner.load_catalog(&games);
+                            db.set_setting("games_synced_at", &chrono::Utc::now().to_rfc3339());
+                        }
+                    }
+                    app.state::<AppState>().start_session();
+                }
+                return;
+            }
+            _ => {
+                let _ = notifications.send(Notification::Status {
+                    status: "logged_out".into(),
+                    detail: "linking was denied or expired — try again".into(),
+                });
+                return;
+            }
+        }
+    }
 }
 
 #[tauri::command]
@@ -158,7 +222,7 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![login, logout, get_state])
+        .invoke_handler(tauri::generate_handler![start_link, logout, get_state])
         .setup(|app| {
             // --- local cache -------------------------------------------------
             let data_dir = app.path().app_data_dir()?;
