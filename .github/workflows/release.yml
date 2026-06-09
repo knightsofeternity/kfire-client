@@ -72,7 +72,7 @@ jobs:
             KFIRE desktop client. Download the installer for your platform below.
 
             **On first launch:** enter your organization's KFIRE server address, then
-            approve the device in the browser — no password needed.
+            approve the device in the browser - no password needed.
 
             **Security warning?** The installers aren't code-signed yet, so your OS may
             warn about an "unknown publisher". The app is safe:

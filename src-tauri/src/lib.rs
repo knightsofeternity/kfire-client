@@ -174,7 +174,7 @@ async fn poll_until_linked(
             _ => {
                 let _ = notifications.send(Notification::Status {
                     status: "logged_out".into(),
-                    detail: "linking was denied or expired — try again".into(),
+                    detail: "linking was denied or expired - try again".into(),
                 });
                 return;
             }
@@ -317,7 +317,7 @@ pub fn run() {
 
             // Auto-resume the session when we have a refresh token. A presence
             // app is meant to run in the background, so default to launch-at-login
-            // the first time we're linked — but only set it once, then the user's
+            // the first time we're linked - but only set it once, then the user's
             // toggle (autostart_configured) is respected forever after.
             if db.get_setting("refresh_token").is_some() {
                 state.start_session();
@@ -337,7 +337,7 @@ pub fn run() {
 
             TrayIconBuilder::with_id("kfire-tray")
                 .icon(app.default_window_icon().unwrap().clone())
-                .tooltip("KFIRE — gaming presence")
+                .tooltip("KFIRE - gaming presence")
                 .menu(&menu)
                 .show_menu_on_left_click(true)
                 .on_menu_event(|app, event| match event.id.as_ref() {

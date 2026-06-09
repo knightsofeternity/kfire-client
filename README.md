@@ -5,7 +5,7 @@
 <h1 align="center">kfire-client</h1>
 
 <p align="center">
-  The KFIRE desktop app — lives in your tray, detects your games, shares your presence.
+  The KFIRE desktop app - lives in your tray, detects your games, shares your presence.
 </p>
 
 <p align="center">
@@ -26,7 +26,7 @@ playing, and reports it to your organization's [kfire-server](https://github.com
 
 Grab the installer for your platform from the
 [**latest release**](https://github.com/knightsofeternity/kfire-client/releases/latest)
-— or, even simpler, from the **Get the app** page on your organization's KFIRE server.
+- or, even simpler, from the **Get the app** page on your organization's KFIRE server.
 
 | Platform | File |
 |----------|------|
@@ -34,10 +34,10 @@ Grab the installer for your platform from the
 | macOS    | `.dmg` (Apple Silicon & Intel) |
 | Linux    | `.AppImage` / `.deb` |
 
-## First launch — no password needed
+## First launch - no password needed
 
 1. Open the app and enter your organization's **server address** (e.g. `https://kfire.example.org`).
-2. The app opens your **browser** to confirm — you approve the device there (you're already signed in).
+2. The app opens your **browser** to confirm - you approve the device there (you're already signed in).
 3. Done. The app links itself and lives in your tray. 🛡️🔥
 
 This is the OAuth **device-grant** flow (like Discord / the GitHub CLI): your password is
@@ -81,8 +81,8 @@ is pushed (see [`.github/workflows/release.yml`](./.github/workflows/release.yml
 
 ## Related repositories
 
-- [kfire-server](https://github.com/knightsofeternity/kfire-server) — backend + admin web UI (AGPL-3.0)
-- [kfire-protocol](https://github.com/knightsofeternity/kfire-protocol) — API & WebSocket contract (Apache-2.0)
+- [kfire-server](https://github.com/knightsofeternity/kfire-server) - backend + admin web UI (AGPL-3.0)
+- [kfire-protocol](https://github.com/knightsofeternity/kfire-protocol) - API & WebSocket contract (Apache-2.0)
 
 ## License
 

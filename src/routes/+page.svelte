@@ -154,7 +154,7 @@
     </form>
   {/if}
 
-  <footer><p>Runs in the tray — closing this window keeps KFIRE running.</p></footer>
+  <footer><p>Runs in the tray - closing this window keeps KFIRE running.</p></footer>
 </main>
 
 <style>
