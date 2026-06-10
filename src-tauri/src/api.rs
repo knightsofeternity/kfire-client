@@ -100,9 +100,14 @@ pub struct ApiClient {
 impl ApiClient {
     /// `base_url` is the server origin, e.g. `https://kfire.example.org`.
     pub fn new(base_url: &str) -> Self {
+        // Trim whitespace BEFORE the trailing slash. A pasted URL with a
+        // trailing space/newline is silently stripped by reqwest's WHATWG URL
+        // parser (so the REST refresh works), but `ws_url()` concatenates it
+        // into the WebSocket URL where http::Uri rejects it with
+        // "invalid uri character" - the connection then never establishes.
         Self {
             http: reqwest::Client::new(),
-            base_url: base_url.trim_end_matches('/').to_string(),
+            base_url: base_url.trim().trim_end_matches('/').to_string(),
         }
     }
 
@@ -279,5 +284,24 @@ impl ApiClient {
             format!("wss://{}", self.base_url)
         };
         format!("{ws}/ws")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ApiClient;
+
+    #[test]
+    fn new_trims_whitespace_and_trailing_slash() {
+        // A pasted URL with surrounding whitespace must not leak into ws_url.
+        let c = ApiClient::new("  https://kfire.example.org/  ");
+        assert_eq!(c.base_url, "https://kfire.example.org");
+        assert_eq!(c.ws_url(), "wss://kfire.example.org/ws");
+    }
+
+    #[test]
+    fn ws_url_has_no_space_with_trailing_space_input() {
+        let c = ApiClient::new("https://kfire.example.org ");
+        assert!(!c.ws_url().contains(' '), "ws_url must not contain a space");
     }
 }
