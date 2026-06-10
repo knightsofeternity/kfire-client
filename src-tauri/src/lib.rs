@@ -253,9 +253,18 @@ fn get_state(state: tauri::State<'_, AppState>) -> UiState {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
-
     tauri::Builder::default()
+        .plugin(
+            tauri_plugin_log::Builder::new()
+                .level(log::LevelFilter::Info)
+                .targets([
+                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Stdout),
+                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::LogDir {
+                        file_name: None,
+                    }),
+                ])
+                .build(),
+        )
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
