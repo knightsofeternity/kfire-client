@@ -20,7 +20,8 @@
 
 Desktop client for **KFIRE** (Knight FIRE), an open-source self-hosted gaming presence
 tracker inspired by Xfire. The client runs in your system tray, detects which game you're
-playing, and reports it to your organization's [kfire-server](https://github.com/knightsofeternity/kfire-server).
+playing, and reports it to **one or several** [kfire-server](https://github.com/knightsofeternity/kfire-server)
+instances at once (one per guild) - a single scanner, reported to every guild you've joined.
 
 ## Download
 
@@ -47,23 +48,37 @@ never typed into the desktop app, and the link is bound to this specific device.
 
 - Runs in the **system tray**, lightweight
 - Scans local processes every 5 s ([`sysinfo`](https://crates.io/crates/sysinfo)) and
-  matches them against the catalog downloaded from the server (cached in SQLite)
+  matches them against the catalogs downloaded from your servers (cached in SQLite)
 - Pushes `game_started` / `game_stopped` over WebSocket, with heartbeat,
   exponential-backoff reconnection and an **offline queue** (events made while offline are
   flushed on reconnect)
+- **Multi-guild**: link several KFIRE servers; one game you play is reported to each guild
+  that knows it, using that guild's own slug
+- **Status** you control from the tray (or the window), globally or per guild:
+  - **Online** - your presence is reported and visible to other members
+  - **Invisible** - still recorded (your stats keep accruing) but hidden from others
+  - **Offline** - nothing is reported for that guild (without quitting the app)
+- The tray icon shows a status dot at a glance (in-game / invisible / connection problem) and
+  the hovered tooltip names the game
+- **Diagnostics**: logs are written to a per-OS file and the real WebSocket error surfaces in
+  the window, so a stuck connection is easy to diagnose
 
 ## Stack
 
 [Tauri 2](https://tauri.app) (Rust) + [Svelte 5](https://svelte.dev).
 
 ```
-src/                      Svelte UI (link flow, status, detected games)
-src-tauri/src/lib.rs      app wiring: state, commands, tray, device linking
-src-tauri/src/api.rs      REST client (pairing, refresh, games)
-src-tauri/src/db.rs       SQLite cache (settings, catalog, offline queue)
-src-tauri/src/scanner.rs  process scan loop (exe → game)
-src-tauri/src/ws.rs       WebSocket task (hello, heartbeat, backoff, drain)
+src/                       Svelte UI (link flow, servers, status, detected games)
+src-tauri/src/lib.rs       app wiring: state, commands, tray menu/icon, sessions
+src-tauri/src/api.rs       REST client (pairing, refresh, games, activity visibility)
+src-tauri/src/db.rs        SQLite cache (settings, linked servers, catalogs, offline queue)
+src-tauri/src/scanner.rs   process scan loop (exe → [(server, slug)])
+src-tauri/src/ws.rs        per-server WebSocket task (hello, heartbeat, backoff, drain)
+src-tauri/src/status.rs    status model (online/invisible/offline) + tray icon state
 ```
+
+A first launch links one server; **Add a server** in the window links more. Each guild keeps
+its own credentials, catalog and offline queue; unlinking one leaves the others running.
 
 ## Development
 

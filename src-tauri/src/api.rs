@@ -39,6 +39,13 @@ pub struct TokenPair {
     pub expires_in: u64,
 }
 
+/// Public instance config from `GET /api/v1/config`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ServerConfig {
+    #[serde(default)]
+    pub org_name: String,
+}
+
 /// Response to starting a device-pairing flow.
 #[derive(Debug, Clone, Deserialize)]
 pub struct PairStart {
@@ -173,6 +180,18 @@ impl ApiClient {
         .await
     }
 
+    /// Public instance config (org name, registration mode). Used to label a
+    /// freshly linked server in the UI.
+    pub async fn fetch_config(&self) -> Result<ServerConfig, ApiError> {
+        Self::handle(
+            self.http
+                .get(format!("{}/api/v1/config", self.base_url))
+                .send()
+                .await,
+        )
+        .await
+    }
+
     pub async fn refresh(
         &self,
         refresh_token: &str,
@@ -190,6 +209,30 @@ impl ApiClient {
                 .await,
         )
         .await
+    }
+
+    /// Sets the owner's activity visibility (the `invisible` vs `online` status).
+    pub async fn set_activity_visible(
+        &self,
+        access_token: &str,
+        visible: bool,
+    ) -> Result<(), ApiError> {
+        let resp = self
+            .http
+            .patch(format!("{}/api/v1/users/me", self.base_url))
+            .bearer_auth(access_token)
+            .json(&serde_json::json!({ "activity_visible": visible }))
+            .send()
+            .await
+            .map_err(|e| ApiError::Network(e.to_string()))?;
+        if resp.status().is_success() {
+            Ok(())
+        } else {
+            Err(ApiError::Server {
+                code: "patch_failed".into(),
+                message: format!("set activity_visible failed: HTTP {}", resp.status()),
+            })
+        }
     }
 
     pub async fn logout(&self, access_token: &str) -> Result<(), ApiError> {
