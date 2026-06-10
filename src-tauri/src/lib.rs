@@ -1,13 +1,14 @@
 pub mod api;
 pub mod db;
 pub mod scanner;
+pub mod status;
 pub mod ws;
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use tauri::{
-    menu::{Menu, MenuItem},
+    menu::{CheckMenuItem, IsMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu},
     tray::TrayIconBuilder,
     Emitter, Manager,
 };
@@ -16,6 +17,7 @@ use tokio::sync::{mpsc, watch, Notify};
 use crate::api::ApiClient;
 use crate::db::Db;
 use crate::scanner::ScannerState;
+use crate::status::{aggregate_icon_state, composite_status_dot, effective_status, IconState};
 use crate::ws::{Notification, WsTask};
 
 /// Shared application state behind Tauri's state manager.
@@ -26,6 +28,8 @@ pub struct AppState {
     pub queue_notify: Arc<Notify>,
     /// Latest access token per server (for best-effort server-side logout).
     pub access_tokens: Arc<Mutex<HashMap<String, String>>>,
+    /// Last WS connection status seen per server (for the tray icon).
+    pub conn_status: Arc<Mutex<HashMap<String, String>>>,
     /// Stop senders, one per running server session (keyed by server_id).
     sessions: Mutex<HashMap<String, watch::Sender<bool>>>,
     notifications: mpsc::UnboundedSender<Notification>,
@@ -53,16 +57,39 @@ impl AppState {
         tauri::async_runtime::spawn(task.run());
     }
 
-    /// Starts a session for every linked server.
+    /// Starts a session for every linked server (honoring offline status).
     fn start_all(&self) {
         for s in self.db.list_servers() {
-            self.start_session(&s.id);
+            self.apply_server_status(&s.id);
         }
     }
 
     fn stop_session(&self, server_id: &str) {
         if let Some(stop) = self.sessions.lock().unwrap().remove(server_id) {
             let _ = stop.send(true);
+        }
+        self.conn_status.lock().unwrap().remove(server_id);
+    }
+
+    /// Effective status for a server (its override, else the global status).
+    fn effective_status(&self, server_id: &str) -> String {
+        let global = self.db.get_setting("global_status").unwrap_or_default();
+        let over = self
+            .db
+            .get_server(server_id)
+            .map(|s| s.status_override)
+            .unwrap_or_default();
+        crate::status::effective_status(&global, &over)
+    }
+
+    /// (Re)starts or stops a server's session to match its effective status.
+    /// Offline → stop; online/invisible → (re)start so the WS task re-applies
+    /// activity visibility on connect.
+    fn apply_server_status(&self, server_id: &str) {
+        if self.effective_status(server_id) == "offline" {
+            self.stop_session(server_id);
+        } else {
+            self.start_session(server_id);
         }
     }
 }
@@ -80,6 +107,7 @@ pub struct UiServer {
 #[derive(serde::Serialize)]
 pub struct UiState {
     servers: Vec<UiServer>,
+    global_status: String,
     logged_in: bool,
     games_count: i64,
     running: Vec<RunningGame>,
@@ -287,10 +315,248 @@ fn get_state(state: tauri::State<'_, AppState>) -> UiState {
         .collect();
 
     UiState {
+        global_status: state
+            .db
+            .get_setting("global_status")
+            .unwrap_or_else(|| "online".into()),
         logged_in: !servers.is_empty(),
         games_count: state.db.games_count(),
         servers,
         running,
+    }
+}
+
+/// Sets the global status and re-applies it to every server that inherits it.
+#[tauri::command]
+fn set_global_status(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    status: String,
+) -> Result<(), String> {
+    if !matches!(status.as_str(), "online" | "invisible" | "offline") {
+        return Err("invalid status".into());
+    }
+    state.db.set_setting("global_status", &status);
+    for s in state.db.list_servers() {
+        if s.status_override == "inherit" {
+            state.apply_server_status(&s.id);
+        }
+    }
+    rebuild_tray(&app);
+    Ok(())
+}
+
+/// Sets one server's status override and re-applies it.
+#[tauri::command]
+fn set_server_status(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    server_id: String,
+    status: String,
+) -> Result<(), String> {
+    if !matches!(status.as_str(), "inherit" | "online" | "invisible" | "offline") {
+        return Err("invalid status".into());
+    }
+    state.db.set_server_status_override(&server_id, &status);
+    state.apply_server_status(&server_id);
+    rebuild_tray(&app);
+    Ok(())
+}
+
+// --- system tray ---------------------------------------------------------------
+
+/// Human label for a server row's current state in the tray menu.
+fn server_state_word(effective: &str, conn: Option<&String>) -> &'static str {
+    match effective {
+        "offline" => "offline",
+        "invisible" => "invisible",
+        _ => match conn.map(String::as_str) {
+            Some("connected") => "online",
+            Some("disconnected") => "reconnecting",
+            _ => "connecting",
+        },
+    }
+}
+
+/// Rebuilds the tray menu, tooltip and status icon from the current state.
+/// Safe to call from any thread that has the `AppHandle`.
+fn rebuild_tray(app: &tauri::AppHandle) {
+    let state = app.state::<AppState>();
+    let global = state
+        .db
+        .get_setting("global_status")
+        .unwrap_or_else(|| "online".into());
+    let servers = state.db.list_servers();
+    let conn = state.conn_status.lock().unwrap().clone();
+    let running = state.scanner.running_games();
+    let in_game = !running.is_empty();
+
+    // --- global status submenu ---
+    let checked = |v: &str| global == v;
+    let g_on = CheckMenuItem::with_id(app, "g:online", "Online", true, checked("online"), None::<&str>);
+    let g_inv = CheckMenuItem::with_id(app, "g:invisible", "Invisible", true, checked("invisible"), None::<&str>);
+    let g_off = CheckMenuItem::with_id(app, "g:offline", "Offline", true, checked("offline"), None::<&str>);
+    let (g_on, g_inv, g_off) = match (g_on, g_inv, g_off) {
+        (Ok(a), Ok(b), Ok(c)) => (a, b, c),
+        _ => return,
+    };
+    let Ok(status_sub) = Submenu::with_items(app, "Status", true, &[&g_on, &g_inv, &g_off]) else {
+        return;
+    };
+
+    // --- per-server submenus ---
+    let mut server_subs: Vec<Submenu<tauri::Wry>> = Vec::new();
+    for s in &servers {
+        let eff = effective_status(&global, &s.status_override);
+        let ov = |v: &str| s.status_override == v;
+        let mk = |id: &str, label: &str, on: bool| {
+            CheckMenuItem::with_id(app, format!("s:{}:{id}", s.id), label, true, on, None::<&str>)
+        };
+        let (inh, on, inv, off, unlink, sep) = match (
+            mk("inherit", "Use global", ov("inherit")),
+            mk("online", "Online", ov("online")),
+            mk("invisible", "Invisible", ov("invisible")),
+            mk("offline", "Offline", ov("offline")),
+            MenuItem::with_id(app, format!("u:{}", s.id), "Unlink", true, None::<&str>),
+            PredefinedMenuItem::separator(app),
+        ) {
+            (Ok(a), Ok(b), Ok(c), Ok(d), Ok(e), Ok(f)) => (a, b, c, d, e, f),
+            _ => return,
+        };
+        let name = if s.org_name.is_empty() { &s.url } else { &s.org_name };
+        let label = format!("{name} — {}", server_state_word(&eff, conn.get(&s.id)));
+        let items: [&dyn IsMenuItem<tauri::Wry>; 6] = [&inh, &on, &inv, &off, &sep, &unlink];
+        if let Ok(sub) = Submenu::with_items(app, label, true, &items) {
+            server_subs.push(sub);
+        }
+    }
+
+    // --- assemble ---
+    let (add, show, quit, sep1, sep2) = match (
+        MenuItem::with_id(app, "add", "Add a server…", true, None::<&str>),
+        MenuItem::with_id(app, "show", "Show KFIRE", true, None::<&str>),
+        MenuItem::with_id(app, "quit", "Quit", true, None::<&str>),
+        PredefinedMenuItem::separator(app),
+        PredefinedMenuItem::separator(app),
+    ) {
+        (Ok(a), Ok(b), Ok(c), Ok(d), Ok(e)) => (a, b, c, d, e),
+        _ => return,
+    };
+
+    let mut items: Vec<&dyn IsMenuItem<tauri::Wry>> = vec![&status_sub, &sep1];
+    for sub in &server_subs {
+        items.push(sub);
+    }
+    items.push(&sep2);
+    items.push(&add);
+    items.push(&show);
+    items.push(&quit);
+
+    let Ok(menu) = Menu::with_items(app, &items) else {
+        return;
+    };
+
+    // --- tooltip + icon ---
+    let server_states: Vec<(String, String)> = servers
+        .iter()
+        .map(|s| {
+            (
+                effective_status(&global, &s.status_override),
+                conn.get(&s.id).cloned().unwrap_or_default(),
+            )
+        })
+        .collect();
+    let icon_state = aggregate_icon_state(in_game, &server_states);
+    let word = match icon_state {
+        IconState::InGame | IconState::Idle => "Online",
+        IconState::Invisible => "Invisible",
+        IconState::Problem => "Reconnecting",
+        IconState::Offline => "Offline (not recording)",
+    };
+    let tooltip = if in_game {
+        let names: Vec<String> = running.iter().map(|(_, n)| n.clone()).collect();
+        format!("KFIRE — Playing {} · {word}", names.join(", "))
+    } else {
+        format!("KFIRE — {word}")
+    };
+
+    if let Some(tray) = app.tray_by_id("kfire-tray") {
+        let _ = tray.set_menu(Some(menu));
+        let _ = tray.set_tooltip(Some(&tooltip));
+        if let Some(base) = app.default_window_icon() {
+            let rgba = composite_status_dot(
+                base.rgba(),
+                base.width(),
+                base.height(),
+                icon_state.color(),
+            );
+            let img = tauri::image::Image::new_owned(rgba, base.width(), base.height());
+            let _ = tray.set_icon(Some(img));
+        }
+    }
+}
+
+/// Handles a tray menu click: status changes, unlink, window, quit.
+fn handle_tray_menu(app: &tauri::AppHandle, id: &str) {
+    match id {
+        "show" => {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+        }
+        "quit" => app.exit(0),
+        "add" => {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+        }
+        id if id.starts_with("g:") => {
+            let status = id[2..].to_string();
+            let app = app.clone();
+            tauri::async_runtime::spawn(async move {
+                let state = app.state::<AppState>();
+                state.db.set_setting("global_status", &status);
+                for s in state.db.list_servers() {
+                    if s.status_override == "inherit" {
+                        state.apply_server_status(&s.id);
+                    }
+                }
+                rebuild_tray(&app);
+            });
+        }
+        id if id.starts_with("s:") => {
+            // s:{server_id}:{status}
+            let rest = &id[2..];
+            if let Some(pos) = rest.rfind(':') {
+                let server_id = rest[..pos].to_string();
+                let status = rest[pos + 1..].to_string();
+                let app = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    let state = app.state::<AppState>();
+                    state.db.set_server_status_override(&server_id, &status);
+                    state.apply_server_status(&server_id);
+                    rebuild_tray(&app);
+                });
+            }
+        }
+        id if id.starts_with("u:") => {
+            let server_id = id[2..].to_string();
+            let app = app.clone();
+            tauri::async_runtime::spawn(async move {
+                let state = app.state::<AppState>();
+                state.stop_session(&server_id);
+                let access = state.access_tokens.lock().unwrap().remove(&server_id);
+                if let (Some(access), Some(server)) = (access, state.db.get_server(&server_id)) {
+                    let api = ApiClient::new(&server.url);
+                    let _ = api.logout(&access).await;
+                }
+                state.db.remove_server(&server_id);
+                rebuild_tray(&app);
+            });
+        }
+        _ => {}
     }
 }
 
@@ -319,6 +585,8 @@ pub fn run() {
             start_link,
             unlink_server,
             get_state,
+            set_global_status,
+            set_server_status,
             get_autostart,
             set_autostart
         ])
@@ -334,11 +602,25 @@ pub fn run() {
             let (event_tx, mut event_rx) = mpsc::unbounded_channel();
             scanner::spawn(scanner_state.clone(), event_tx);
 
-            // --- notifications → webview events --------------------------------
+            // Last WS status per server, shared with the notification loop.
+            let conn_status: Arc<Mutex<HashMap<String, String>>> =
+                Arc::new(Mutex::new(HashMap::new()));
+
+            // --- notifications → conn status + tray + webview events ----------
             let (notif_tx, mut notif_rx) = mpsc::unbounded_channel::<Notification>();
             let handle = app.handle().clone();
+            let conn_for_notif = conn_status.clone();
             tauri::async_runtime::spawn(async move {
                 while let Some(n) = notif_rx.recv().await {
+                    if let Notification::Status { server_id, status, .. } = &n {
+                        if !server_id.is_empty() {
+                            conn_for_notif
+                                .lock()
+                                .unwrap()
+                                .insert(server_id.clone(), status.clone());
+                            rebuild_tray(&handle);
+                        }
+                    }
                     let event = match &n {
                         Notification::Status { .. } => "kfire://status",
                         Notification::Presence { .. } => "kfire://presence",
@@ -352,6 +634,7 @@ pub fn run() {
                 scanner: scanner_state,
                 queue_notify: Arc::new(Notify::new()),
                 access_tokens: Arc::new(Mutex::new(HashMap::new())),
+                conn_status,
                 sessions: Mutex::new(HashMap::new()),
                 notifications: notif_tx,
             };
@@ -363,18 +646,30 @@ pub fn run() {
             tauri::async_runtime::spawn(async move {
                 while let Some(ev) = event_rx.recv().await {
                     let event_type = if ev.started { "game_started" } else { "game_stopped" };
-                    queue_db.queue_event(&ev.server_id, event_type, &ev.game_slug, &ev.ts.to_rfc3339());
-                    queue_notify.notify_one();
+                    // Offline servers have no running session to drain the
+                    // queue, so we never enqueue for them (no flood on return).
+                    let global = queue_db.get_setting("global_status").unwrap_or_default();
+                    let over = queue_db
+                        .get_server(&ev.server_id)
+                        .map(|s| s.status_override)
+                        .unwrap_or_default();
+                    if crate::status::effective_status(&global, &over) != "offline" {
+                        queue_db.queue_event(&ev.server_id, event_type, &ev.game_slug, &ev.ts.to_rfc3339());
+                        queue_notify.notify_one();
+                    }
                     let _ = running_handle.emit("kfire://detection", event_type);
+                    rebuild_tray(&running_handle);
                 }
             });
 
-            // Auto-resume every linked server's session. A presence app runs in
-            // the background, so default to launch-at-login the first time we're
-            // linked - but only set it once, then the user's toggle
-            // (autostart_configured) is respected forever after.
+            app.manage(state);
+
+            // Auto-resume every linked server's session (offline ones stay
+            // stopped). A presence app runs in the background, so default to
+            // launch-at-login the first time we're linked - but only set it
+            // once, then the user's toggle (autostart_configured) wins forever.
             if !db.list_servers().is_empty() {
-                state.start_all();
+                app.state::<AppState>().start_all();
                 if db.get_setting("autostart_configured").is_none() {
                     use tauri_plugin_autostart::ManagerExt;
                     if app.autolaunch().enable().is_ok() {
@@ -382,29 +677,15 @@ pub fn run() {
                     }
                 }
             }
-            app.manage(state);
 
-            // --- system tray ----------------------------------------------------
-            let show = MenuItem::with_id(app, "show", "Show KFIRE", true, None::<&str>)?;
-            let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&show, &quit])?;
-
+            // --- system tray (menu/icon/tooltip filled by rebuild_tray) -------
             TrayIconBuilder::with_id("kfire-tray")
                 .icon(app.default_window_icon().unwrap().clone())
                 .tooltip("KFIRE - gaming presence")
-                .menu(&menu)
                 .show_menu_on_left_click(true)
-                .on_menu_event(|app, event| match event.id.as_ref() {
-                    "show" => {
-                        if let Some(window) = app.get_webview_window("main") {
-                            let _ = window.show();
-                            let _ = window.set_focus();
-                        }
-                    }
-                    "quit" => app.exit(0),
-                    _ => {}
-                })
+                .on_menu_event(|app, event| handle_tray_menu(app, event.id.as_ref()))
                 .build(app)?;
+            rebuild_tray(&app.handle());
 
             Ok(())
         })

@@ -227,6 +227,15 @@ impl Db {
         );
     }
 
+    /// Sets a server's status override (`inherit` | `online` | `invisible` | `offline`).
+    pub fn set_server_status_override(&self, id: &str, status: &str) {
+        let conn = self.conn.lock().unwrap();
+        let _ = conn.execute(
+            "UPDATE servers SET status_override = ?2 WHERE id = ?1",
+            params![id, status],
+        );
+    }
+
     pub fn set_server_org_name(&self, id: &str, org_name: &str) {
         let conn = self.conn.lock().unwrap();
         let _ = conn.execute(
