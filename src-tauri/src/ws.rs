@@ -100,8 +100,8 @@ impl WsTask {
                 }
                 Err(ApiError::Network(e)) => {
                     log::warn!("ws: refresh unreachable: {e}");
+                    self.status("disconnected", &format!("server unreachable: {e}"));
                     attempt += 1;
-                    self.status("disconnected", "server unreachable");
                     if self.backoff(attempt).await {
                         return;
                     }
@@ -110,18 +110,20 @@ impl WsTask {
             };
 
             // --- connect + serve -------------------------------------------
-            match self.serve(&api, &access, &device_id).await {
+            let reason = match self.serve(&api, &access, &device_id).await {
                 ServeEnd::Shutdown => return,
                 ServeEnd::ConnectFailed(e) => {
                     log::warn!("ws: connect failed: {e}");
                     attempt += 1;
+                    e
                 }
                 ServeEnd::Dropped(e) => {
                     log::warn!("ws: connection dropped: {e}");
                     attempt = 0; // we did connect: restart backoff from small
+                    e
                 }
-            }
-            self.status("disconnected", "reconnecting…");
+            };
+            self.status("disconnected", &reconnect_detail(&reason));
             if self.backoff(attempt.max(1)).await {
                 return;
             }
@@ -317,4 +319,34 @@ fn envelope(typ: &str, payload: serde_json::Value) -> String {
         "payload": payload,
     })
     .to_string()
+}
+
+/// Builds the user-facing "disconnected" detail from the reason the connection
+/// ended. An empty reason (e.g. a clean shutdown path) yields a bare
+/// "reconnecting…"; otherwise the real cause is shown so a stuck client is
+/// self-diagnosable instead of an opaque spinner.
+fn reconnect_detail(reason: &str) -> String {
+    if reason.is_empty() {
+        "reconnecting…".to_string()
+    } else {
+        format!("reconnecting… ({reason})")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::reconnect_detail;
+
+    #[test]
+    fn reconnect_detail_includes_reason() {
+        assert_eq!(
+            reconnect_detail("no hello_ack"),
+            "reconnecting… (no hello_ack)"
+        );
+    }
+
+    #[test]
+    fn reconnect_detail_empty_reason_is_bare() {
+        assert_eq!(reconnect_detail(""), "reconnecting…");
+    }
 }
