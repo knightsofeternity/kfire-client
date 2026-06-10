@@ -12,6 +12,8 @@ use serde_json::{json, Value};
 use tokio::sync::{mpsc, watch, Notify};
 use tokio_tungstenite::tungstenite::Message;
 
+use std::collections::HashMap;
+
 use kfire_client_lib::api::ApiClient;
 use kfire_client_lib::db::Db;
 use kfire_client_lib::scanner::ScannerState;
@@ -133,17 +135,17 @@ async fn full_presence_pipeline() {
         .await
         .expect("alice login");
 
-    db.set_setting("server_url", &api.base_url);
-    db.set_setting("refresh_token", &tokens.refresh_token);
+    let server_id = db.add_server(&api.base_url, &tokens.refresh_token, "Test Org");
 
-    // Catalog download + matching index (same path as the login command).
+    // Catalog download + matching index (same path as the link command).
     let games = api
         .fetch_games(&tokens.access_token)
         .await
         .expect("fetch games");
     assert!(games.len() > 10_000, "catalog too small: {}", games.len());
-    db.replace_games(&games).unwrap();
-    scanner.load_catalog(&games);
+    db.replace_games(&server_id, &games).unwrap();
+    let catalog: Vec<_> = games.iter().map(|g| (server_id.clone(), g.clone())).collect();
+    scanner.load_catalog(&catalog);
     assert!(
         scanner
             .exe_index
@@ -159,11 +161,12 @@ async fn full_presence_pipeline() {
     let (stop_tx, stop_rx) = watch::channel(false);
 
     let task = WsTask {
+        server_id: server_id.clone(),
         db: db.clone(),
         scanner: scanner.clone(),
         queue_notify: queue_notify.clone(),
         notifications: notif_tx,
-        access_token: Arc::new(std::sync::Mutex::new(None)),
+        access_tokens: Arc::new(std::sync::Mutex::new(HashMap::new())),
         shutdown: stop_rx,
     };
     let task_handle = tokio::spawn(task.run());
@@ -187,6 +190,7 @@ async fn full_presence_pipeline() {
 
     // --- simulate a detection: queued event flows out over WS --------------------
     db.queue_event(
+        &server_id,
         "game_started",
         "counter-strike-2",
         &chrono::Utc::now().to_rfc3339(),
@@ -197,6 +201,7 @@ async fn full_presence_pipeline() {
     assert_eq!(payload["game"]["slug"], "counter-strike-2");
 
     db.queue_event(
+        &server_id,
         "game_stopped",
         "counter-strike-2",
         &chrono::Utc::now().to_rfc3339(),
@@ -206,7 +211,7 @@ async fn full_presence_pipeline() {
 
     // The offline queue must be fully drained.
     tokio::time::sleep(Duration::from_millis(300)).await;
-    assert_eq!(db.pending_events().len(), 0, "queue not drained");
+    assert_eq!(db.pending_events(&server_id).len(), 0, "queue not drained");
 
     // --- logout: bob sees alice go offline ----------------------------------------
     stop_tx.send(true).unwrap();

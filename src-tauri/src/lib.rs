@@ -3,6 +3,7 @@ pub mod db;
 pub mod scanner;
 pub mod ws;
 
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use tauri::{
@@ -21,35 +22,46 @@ use crate::ws::{Notification, WsTask};
 pub struct AppState {
     pub db: Arc<Db>,
     pub scanner: Arc<ScannerState>,
-    /// Wakes the WS task when the scanner queued an event.
+    /// Wakes the WS tasks when the scanner queued an event.
     pub queue_notify: Arc<Notify>,
-    /// Last access token (for best-effort server-side logout).
-    pub access_token: Arc<Mutex<Option<String>>>,
-    /// Stops the running WS task when flipped to true.
-    session_stop: Mutex<Option<watch::Sender<bool>>>,
+    /// Latest access token per server (for best-effort server-side logout).
+    pub access_tokens: Arc<Mutex<HashMap<String, String>>>,
+    /// Stop senders, one per running server session (keyed by server_id).
+    sessions: Mutex<HashMap<String, watch::Sender<bool>>>,
     notifications: mpsc::UnboundedSender<Notification>,
 }
 
 impl AppState {
-    /// Starts (or restarts) the WebSocket session task.
-    fn start_session(&self) {
-        self.stop_session();
+    /// Starts (or restarts) the WebSocket session task for one server.
+    fn start_session(&self, server_id: &str) {
+        self.stop_session(server_id);
         let (stop_tx, stop_rx) = watch::channel(false);
-        *self.session_stop.lock().unwrap() = Some(stop_tx);
+        self.sessions
+            .lock()
+            .unwrap()
+            .insert(server_id.to_string(), stop_tx);
 
         let task = WsTask {
+            server_id: server_id.to_string(),
             db: self.db.clone(),
             scanner: self.scanner.clone(),
             queue_notify: self.queue_notify.clone(),
             notifications: self.notifications.clone(),
-            access_token: self.access_token.clone(),
+            access_tokens: self.access_tokens.clone(),
             shutdown: stop_rx,
         };
         tauri::async_runtime::spawn(task.run());
     }
 
-    fn stop_session(&self) {
-        if let Some(stop) = self.session_stop.lock().unwrap().take() {
+    /// Starts a session for every linked server.
+    fn start_all(&self) {
+        for s in self.db.list_servers() {
+            self.start_session(&s.id);
+        }
+    }
+
+    fn stop_session(&self, server_id: &str) {
+        if let Some(stop) = self.sessions.lock().unwrap().remove(server_id) {
             let _ = stop.send(true);
         }
     }
@@ -58,9 +70,16 @@ impl AppState {
 // --- Tauri commands ---------------------------------------------------------
 
 #[derive(serde::Serialize)]
+pub struct UiServer {
+    id: String,
+    url: String,
+    org_name: String,
+    status_override: String,
+}
+
+#[derive(serde::Serialize)]
 pub struct UiState {
-    server_url: Option<String>,
-    username: Option<String>,
+    servers: Vec<UiServer>,
     logged_in: bool,
     games_count: i64,
     running: Vec<RunningGame>,
@@ -78,9 +97,9 @@ pub struct LinkInfo {
     verification_url: String,
 }
 
-/// Starts browser-based device linking: registers a pairing with the server,
-/// opens the browser for the user to approve, and polls in the background
-/// until tokens arrive (then starts the session).
+/// Starts browser-based device linking for an additional server: registers a
+/// pairing, opens the browser to approve, and polls in the background until
+/// tokens arrive (then links the server and starts its session).
 #[tauri::command]
 async fn start_link(
     app: tauri::AppHandle,
@@ -88,6 +107,12 @@ async fn start_link(
     server_url: String,
 ) -> Result<LinkInfo, String> {
     let api = ApiClient::new(&server_url);
+
+    // Refuse linking the same server twice (additive pairing is per-server).
+    if state.db.find_server_by_url(&api.base_url).is_some() {
+        return Err("this server is already linked".into());
+    }
+
     let device_id = state.db.device_id();
     let start = api
         .start_pairing(&device_id)
@@ -115,8 +140,8 @@ async fn start_link(
     })
 }
 
-/// Polls the pairing until the user approves it (or it fails), then stores the
-/// device-bound tokens and starts the presence session.
+/// Polls the pairing until the user approves it (or it fails), then links the
+/// server and starts its presence session.
 async fn poll_until_linked(
     app: tauri::AppHandle,
     base: String,
@@ -126,12 +151,12 @@ async fn poll_until_linked(
     use tauri::Manager;
 
     // Clone the shared handles so we never hold a State borrow across awaits.
-    let (db, scanner, access_token, notifications) = {
+    let (db, scanner, access_tokens, notifications) = {
         let s = app.state::<AppState>();
         (
             s.db.clone(),
             s.scanner.clone(),
-            s.access_token.clone(),
+            s.access_tokens.clone(),
             s.notifications.clone(),
         )
     };
@@ -150,16 +175,28 @@ async fn poll_until_linked(
             "pending" => continue,
             "complete" => {
                 if let (Some(access), Some(refresh)) = (poll.access_token, poll.refresh_token) {
-                    db.set_setting("server_url", &api.base_url);
-                    db.set_setting("refresh_token", &refresh);
-                    *access_token.lock().unwrap() = Some(access.clone());
+                    // Label the server with its org name (best-effort).
+                    let org = api
+                        .fetch_config()
+                        .await
+                        .map(|c| c.org_name)
+                        .unwrap_or_default();
+                    let server_id = db.add_server(&api.base_url, &refresh, &org);
+                    access_tokens
+                        .lock()
+                        .unwrap()
+                        .insert(server_id.clone(), access.clone());
+
                     if let Ok(games) = api.fetch_games(&access).await {
-                        if db.replace_games(&games).is_ok() {
-                            scanner.load_catalog(&games);
-                            db.set_setting("games_synced_at", &chrono::Utc::now().to_rfc3339());
+                        if db.replace_games(&server_id, &games).is_ok() {
+                            db.set_setting(
+                                &format!("games_synced_at:{server_id}"),
+                                &chrono::Utc::now().to_rfc3339(),
+                            );
+                            scanner.load_catalog(&db.load_games());
                         }
                     }
-                    app.state::<AppState>().start_session();
+                    app.state::<AppState>().start_session(&server_id);
 
                     // First successful link: default to launch-at-login (set once).
                     if db.get_setting("autostart_configured").is_none() {
@@ -173,6 +210,7 @@ async fn poll_until_linked(
             }
             _ => {
                 let _ = notifications.send(Notification::Status {
+                    server_id: String::new(),
                     status: "logged_out".into(),
                     detail: "linking was denied or expired - try again".into(),
                 });
@@ -182,21 +220,21 @@ async fn poll_until_linked(
     }
 }
 
+/// Unlinks one server: stops its session, best-effort server-side token
+/// revocation, and drops its local data.
 #[tauri::command]
-async fn logout(state: tauri::State<'_, AppState>) -> Result<(), String> {
-    state.stop_session();
+async fn unlink_server(state: tauri::State<'_, AppState>, server_id: String) -> Result<(), String> {
+    state.stop_session(&server_id);
 
-    // Best-effort server-side revocation of this device's refresh token.
-    let access = state.access_token.lock().unwrap().take();
-    if let (Some(access), Some(server_url)) = (access, state.db.get_setting("server_url")) {
-        let api = ApiClient::new(&server_url);
+    let access = state.access_tokens.lock().unwrap().remove(&server_id);
+    if let (Some(access), Some(server)) = (access, state.db.get_server(&server_id)) {
+        let api = ApiClient::new(&server.url);
         if let Err(e) = api.logout(&access).await {
-            log::warn!("logout: server revocation failed: {e}");
+            log::warn!("unlink: server revocation failed: {e}");
         }
     }
 
-    state.db.delete_setting("refresh_token");
-    state.db.delete_setting("username");
+    state.db.remove_server(&server_id);
     Ok(())
 }
 
@@ -229,22 +267,29 @@ fn set_autostart(
 
 #[tauri::command]
 fn get_state(state: tauri::State<'_, AppState>) -> UiState {
-    let names = state.scanner.names.read().unwrap();
+    let servers = state
+        .db
+        .list_servers()
+        .into_iter()
+        .map(|s| UiServer {
+            id: s.id,
+            url: s.url,
+            org_name: s.org_name,
+            status_override: s.status_override,
+        })
+        .collect::<Vec<_>>();
+
     let running = state
         .scanner
-        .running_slugs()
+        .running_games()
         .into_iter()
-        .map(|slug| RunningGame {
-            name: names.get(&slug).cloned().unwrap_or_else(|| slug.clone()),
-            slug,
-        })
+        .map(|(slug, name)| RunningGame { slug, name })
         .collect();
 
     UiState {
-        server_url: state.db.get_setting("server_url"),
-        username: state.db.get_setting("username"),
-        logged_in: state.db.get_setting("refresh_token").is_some(),
+        logged_in: !servers.is_empty(),
         games_count: state.db.games_count(),
+        servers,
         running,
     }
 }
@@ -272,7 +317,7 @@ pub fn run() {
         ))
         .invoke_handler(tauri::generate_handler![
             start_link,
-            logout,
+            unlink_server,
             get_state,
             get_autostart,
             set_autostart
@@ -306,30 +351,30 @@ pub fn run() {
                 db: db.clone(),
                 scanner: scanner_state,
                 queue_notify: Arc::new(Notify::new()),
-                access_token: Arc::new(Mutex::new(None)),
-                session_stop: Mutex::new(None),
+                access_tokens: Arc::new(Mutex::new(HashMap::new())),
+                sessions: Mutex::new(HashMap::new()),
                 notifications: notif_tx,
             };
 
-            // --- scanner events → SQLite queue → WS task -----------------------
+            // --- scanner events → SQLite queue → WS tasks ----------------------
             let queue_db = db.clone();
             let queue_notify = state.queue_notify.clone();
             let running_handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 while let Some(ev) = event_rx.recv().await {
                     let event_type = if ev.started { "game_started" } else { "game_stopped" };
-                    queue_db.queue_event(event_type, &ev.game_slug, &ev.ts.to_rfc3339());
+                    queue_db.queue_event(&ev.server_id, event_type, &ev.game_slug, &ev.ts.to_rfc3339());
                     queue_notify.notify_one();
                     let _ = running_handle.emit("kfire://detection", event_type);
                 }
             });
 
-            // Auto-resume the session when we have a refresh token. A presence
-            // app is meant to run in the background, so default to launch-at-login
-            // the first time we're linked - but only set it once, then the user's
-            // toggle (autostart_configured) is respected forever after.
-            if db.get_setting("refresh_token").is_some() {
-                state.start_session();
+            // Auto-resume every linked server's session. A presence app runs in
+            // the background, so default to launch-at-login the first time we're
+            // linked - but only set it once, then the user's toggle
+            // (autostart_configured) is respected forever after.
+            if !db.list_servers().is_empty() {
+                state.start_all();
                 if db.get_setting("autostart_configured").is_none() {
                     use tauri_plugin_autostart::ManagerExt;
                     if app.autolaunch().enable().is_ok() {
