@@ -319,6 +319,7 @@ impl WsTask {
                 }
                 // Rebuild the shared index from every server's catalog.
                 self.scanner.load_catalog(&self.db.load_games());
+                self.scanner.reload_ignored(&self.db.list_ignored());
                 self.db.set_setting(&key, &chrono::Utc::now().to_rfc3339());
                 log::info!(
                     "ws[{}]: games catalog synced ({} games)",

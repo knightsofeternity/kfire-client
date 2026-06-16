@@ -247,6 +247,7 @@ async fn poll_until_linked(
                                 &chrono::Utc::now().to_rfc3339(),
                             );
                             scanner.load_catalog(&db.load_games());
+                            scanner.reload_ignored(&db.list_ignored());
                         }
                     }
                     app.state::<AppState>().start_session(&server_id);
@@ -624,6 +625,7 @@ pub fn run() {
             // --- scanner ------------------------------------------------------
             let scanner_state = Arc::new(ScannerState::default());
             scanner_state.load_catalog(&db.load_games());
+            scanner_state.reload_ignored(&db.list_ignored());
             let (event_tx, mut event_rx) = mpsc::unbounded_channel();
             scanner::spawn(scanner_state.clone(), event_tx);
 

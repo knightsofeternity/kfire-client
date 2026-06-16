@@ -17,6 +17,30 @@ use tokio::sync::mpsc::UnboundedSender;
 /// How often we scan the process table.
 const SCAN_INTERVAL: Duration = Duration::from_secs(5);
 
+const CPU_ACTIVE_THRESHOLD: f32 = 1.0; // summed CPU% across the basename's processes
+const IDLE_SCANS_TO_DROP: u32 = 3; // ~15s at the 5s scan interval
+
+/// Whether a matched exe counts as "playing". START is never CPU-gated; a
+/// process already running is dropped only after IDLE_SCANS_TO_DROP consecutive
+/// idle scans. Any CPU activity resets the idle counter.
+fn is_active(
+    exe: &str,
+    was_running: bool,
+    cpu: f32,
+    idle: &mut std::collections::HashMap<String, u32>,
+) -> bool {
+    if cpu >= CPU_ACTIVE_THRESHOLD {
+        idle.remove(exe);
+        return true;
+    }
+    if !was_running {
+        return true;
+    }
+    let n = idle.entry(exe.to_string()).or_insert(0);
+    *n += 1;
+    *n < IDLE_SCANS_TO_DROP
+}
+
 /// A presence event produced by the scanner, addressed to one server.
 #[derive(Debug, Clone)]
 pub struct GameEvent {
@@ -33,8 +57,12 @@ pub struct ScannerState {
     pub exe_index: RwLock<HashMap<String, Vec<(String, String)>>>,
     /// slug → display name, for the UI (merged across servers).
     pub names: RwLock<HashMap<String, String>>,
-    /// exe basenames currently detected as running.
+    /// exe basenames currently detected as running (the effective "playing" set).
     pub running: RwLock<HashSet<String>>,
+    /// `(server_id, slug)` pairs the user has chosen to ignore (never reported).
+    pub ignored: RwLock<HashSet<(String, String)>>,
+    /// exe basenames the user has "stopped"; suppressed until the process exits.
+    pub suppressed: RwLock<HashSet<String>>,
 }
 
 impl ScannerState {
@@ -60,15 +88,49 @@ impl ScannerState {
         *self.names.write().unwrap() = names;
     }
 
+    /// Replaces the ignore set from a `db.list_ignored()` slice.
+    pub fn reload_ignored(&self, ignored: &[(String, String)]) {
+        *self.ignored.write().unwrap() = ignored.iter().cloned().collect();
+    }
+
+    /// Marks every exe that maps to `slug` as suppressed, so it stops being
+    /// reported until the underlying process exits. Used when the user "stops"
+    /// a running game from the UI.
+    pub fn suppress_slug(&self, slug: &str) {
+        let index = self.exe_index.read().unwrap();
+        let mut suppressed = self.suppressed.write().unwrap();
+        for (exe, pairs) in index.iter() {
+            if pairs.iter().any(|(_, s)| s == slug) {
+                suppressed.insert(exe.clone());
+            }
+        }
+    }
+
+    /// All `(server_id, slug)` pairs that map to this slug (deduplicated).
+    pub fn servers_for_slug(&self, slug: &str) -> Vec<(String, String)> {
+        let index = self.exe_index.read().unwrap();
+        let mut seen = HashSet::new();
+        let mut out = Vec::new();
+        for pairs in index.values() {
+            for pair in pairs {
+                if pair.1 == slug && seen.insert(pair.clone()) {
+                    out.push(pair.clone());
+                }
+            }
+        }
+        out
+    }
+
     /// Slugs of the given server's games that are currently running.
     pub fn running_for(&self, server_id: &str) -> Vec<String> {
         let index = self.exe_index.read().unwrap();
         let running = self.running.read().unwrap();
+        let ignored = self.ignored.read().unwrap();
         let mut slugs = Vec::new();
         for exe in running.iter() {
             if let Some(pairs) = index.get(exe) {
                 for (sid, slug) in pairs {
-                    if sid == server_id {
+                    if sid == server_id && !ignored.contains(&(sid.clone(), slug.clone())) {
                         slugs.push(slug.clone());
                     }
                 }
@@ -82,11 +144,16 @@ impl ScannerState {
         let index = self.exe_index.read().unwrap();
         let names = self.names.read().unwrap();
         let running = self.running.read().unwrap();
+        let ignored = self.ignored.read().unwrap();
         let mut seen = HashSet::new();
         let mut out = Vec::new();
         for exe in running.iter() {
             if let Some(pairs) = index.get(exe) {
-                if let Some((_, slug)) = pairs.first() {
+                // Show the game only via a pair the user has not ignored.
+                if let Some((_, slug)) = pairs
+                    .iter()
+                    .find(|(sid, slug)| !ignored.contains(&(sid.clone(), slug.clone())))
+                {
                     if seen.insert(slug.clone()) {
                         let name = names.get(slug).cloned().unwrap_or_else(|| slug.clone());
                         out.push((slug.clone(), name));
@@ -108,44 +175,79 @@ pub fn spawn(state: Arc<ScannerState>, events: UnboundedSender<GameEvent>) {
 
 fn run(state: Arc<ScannerState>, events: UnboundedSender<GameEvent>) {
     let mut sys = System::new();
+    // Per-basename consecutive-idle-scan counter; persists across scans.
+    let mut idle: HashMap<String, u32> = HashMap::new();
 
     loop {
-        sys.refresh_processes_specifics(ProcessesToUpdate::All, true, ProcessRefreshKind::nothing());
+        sys.refresh_processes_specifics(
+            ProcessesToUpdate::All,
+            true,
+            ProcessRefreshKind::nothing().with_cpu(),
+        );
 
-        let seen: HashSet<String> = {
+        // Summed CPU% per matched basename, plus the set of matched basenames
+        // actually present in the process table this scan.
+        let (cpu_sum, present): (HashMap<String, f32>, HashSet<String>) = {
             let index = state.exe_index.read().unwrap();
             if index.is_empty() {
                 // No catalog downloaded yet: nothing to match.
                 thread::sleep(SCAN_INTERVAL);
                 continue;
             }
-            sys.processes()
-                .values()
-                .filter_map(|p| {
-                    let name = p.name().to_string_lossy().to_lowercase();
-                    if index.contains_key(&name) {
-                        Some(name)
-                    } else {
-                        None
-                    }
+            let mut cpu_sum: HashMap<String, f32> = HashMap::new();
+            let mut present: HashSet<String> = HashSet::new();
+            for p in sys.processes().values() {
+                let name = p.name().to_string_lossy().to_lowercase();
+                if index.contains_key(&name) {
+                    *cpu_sum.entry(name.clone()).or_insert(0.0) += p.cpu_usage();
+                    present.insert(name);
+                }
+            }
+            (cpu_sum, present)
+        };
+
+        // Compute the new effective ("playing") set: present + CPU-active +
+        // not user-suppressed. START is never CPU-gated (see is_active).
+        let seen_effective: HashSet<String> = {
+            let prev = state.running.read().unwrap();
+            let suppressed = state.suppressed.read().unwrap();
+            present
+                .iter()
+                .filter(|exe| {
+                    let cpu = cpu_sum.get(*exe).copied().unwrap_or(0.0);
+                    is_active(exe, prev.contains(*exe), cpu, &mut idle)
+                        && !suppressed.contains(*exe)
                 })
+                .cloned()
                 .collect()
         };
+
+        // Auto-clear suppression/idle bookkeeping for processes that fully exited.
+        {
+            let mut suppressed = state.suppressed.write().unwrap();
+            suppressed.retain(|exe| present.contains(exe));
+        }
+        idle.retain(|exe, _| present.contains(exe));
 
         let (started, stopped): (Vec<String>, Vec<String>) = {
             let running = state.running.read().unwrap();
             (
-                seen.difference(&running).cloned().collect(),
-                running.difference(&seen).cloned().collect(),
+                seen_effective.difference(&running).cloned().collect(),
+                running.difference(&seen_effective).cloned().collect(),
             )
         };
 
-        // Fan each started/stopped executable out to every server that knows it.
+        // Fan each started/stopped executable out to every server that knows it,
+        // skipping any (server_id, slug) pair the user has ignored.
         let now = chrono::Utc::now();
         {
             let index = state.exe_index.read().unwrap();
+            let ignored = state.ignored.read().unwrap();
             for exe in &started {
                 for (server_id, slug) in index.get(exe).into_iter().flatten() {
+                    if ignored.contains(&(server_id.clone(), slug.clone())) {
+                        continue;
+                    }
                     log::info!("scanner: game_started {slug} ({server_id})");
                     let _ = events.send(GameEvent {
                         started: true,
@@ -157,6 +259,9 @@ fn run(state: Arc<ScannerState>, events: UnboundedSender<GameEvent>) {
             }
             for exe in &stopped {
                 for (server_id, slug) in index.get(exe).into_iter().flatten() {
+                    if ignored.contains(&(server_id.clone(), slug.clone())) {
+                        continue;
+                    }
                     log::info!("scanner: game_stopped {slug} ({server_id})");
                     let _ = events.send(GameEvent {
                         started: false,
@@ -168,7 +273,7 @@ fn run(state: Arc<ScannerState>, events: UnboundedSender<GameEvent>) {
             }
         }
 
-        *state.running.write().unwrap() = seen;
+        *state.running.write().unwrap() = seen_effective;
         thread::sleep(SCAN_INTERVAL);
     }
 }
@@ -184,6 +289,39 @@ mod tests {
             name: format!("Name {slug}"),
             executable_names: vec![exe.into()],
         }
+    }
+
+    #[test]
+    fn cpu_gate_drops_after_sustained_idle_not_on_first() {
+        let mut idle: std::collections::HashMap<String, u32> = Default::default();
+        assert!(is_active("g.exe", true, 0.0, &mut idle)); // running, idle #1 -> keep
+        assert!(is_active("g.exe", true, 0.0, &mut idle)); // idle #2 -> keep
+        assert!(!is_active("g.exe", true, 0.0, &mut idle)); // idle #3 -> drop
+        assert!(is_active("g.exe", true, 5.0, &mut idle)); // CPU back -> active, counter reset
+        assert!(is_active("g.exe", true, 0.0, &mut idle)); // idle #1 again (reset worked)
+    }
+
+    #[test]
+    fn cpu_gate_does_not_gate_start() {
+        let mut idle = Default::default();
+        assert!(is_active("g.exe", false, 0.0, &mut idle)); // freshly seen, idle -> still starts
+    }
+
+    #[test]
+    fn ignored_pair_excluded_from_running_for() {
+        let s = ScannerState::default();
+        s.load_catalog(&[("srv-a".into(), game("a-game", "game.exe"))]);
+        s.running.write().unwrap().insert("game.exe".into());
+        s.reload_ignored(&[("srv-a".into(), "a-game".into())]);
+        assert!(s.running_for("srv-a").is_empty());
+    }
+
+    #[test]
+    fn suppress_slug_marks_exe() {
+        let s = ScannerState::default();
+        s.load_catalog(&[("srv-a".into(), game("a-game", "game.exe"))]);
+        s.suppress_slug("a-game");
+        assert!(s.suppressed.read().unwrap().contains("game.exe"));
     }
 
     #[test]
