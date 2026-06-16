@@ -4,6 +4,7 @@
   import { onMount } from "svelte";
 
   type RunningGame = { slug: string; name: string };
+  type IgnoredGame = { server_id: string; slug: string; name: string };
   type UiServer = { id: string; url: string; org_name: string; status_override: string };
   type UiState = {
     servers: UiServer[];
@@ -11,6 +12,7 @@
     logged_in: boolean;
     games_count: number;
     running: RunningGame[];
+    ignored: IgnoredGame[];
   };
   type LinkInfo = { user_code: string; verification_url: string };
   type ServerStatus = "disconnected" | "connecting" | "connected" | "logged_out";
@@ -19,6 +21,7 @@
   let servers = $state<UiServer[]>([]);
   let statuses = $state<Record<string, { status: ServerStatus; detail: string }>>({});
   let running = $state<RunningGame[]>([]);
+  let ignored = $state<IgnoredGame[]>([]);
   let gamesCount = $state(0);
   let globalStatus = $state("online");
   let autostart = $state(false);
@@ -53,6 +56,7 @@
     globalStatus = s.global_status;
     gamesCount = s.games_count;
     running = s.running;
+    ignored = s.ignored;
     if (servers.length > 0) refreshAutostart();
     // Drop status entries for servers that no longer exist.
     const ids = new Set(servers.map((x) => x.id));
@@ -220,8 +224,27 @@
       {#if running.length === 0}
         <p class="muted">No game detected.</p>
       {:else}
-        <ul>{#each running as game (game.slug)}<li>🎮 {game.name}</li>{/each}</ul>
+        <ul>{#each running as game (game.slug)}
+          <li class="np">
+            <span class="np-name">🎮 {game.name}</span>
+            <span class="np-actions">
+              <button class="mini" onclick={() => invoke('stop_game', { slug: game.slug }).then(refreshState)}>Stop</button>
+              <button class="mini" onclick={() => invoke('ignore_game', { slug: game.slug, ignored: true }).then(refreshState)} title="Toujours ignorer ce jeu">Ignorer</button>
+            </span>
+          </li>
+        {/each}</ul>
       {/if}
+
+      {#if ignored.length > 0}
+        <h2>Jeux ignorés</h2>
+        <ul>{#each ignored as g (g.server_id + g.slug)}
+          <li class="np">
+            <span class="np-name">{g.name}</span>
+            <button class="mini" onclick={() => invoke('ignore_game', { slug: g.slug, ignored: false }).then(refreshState)}>Réactiver</button>
+          </li>
+        {/each}</ul>
+      {/if}
+
       <p class="muted small">{gamesCount.toLocaleString()} games across your catalogs</p>
 
       {#if adding}
@@ -288,6 +311,11 @@
   select { padding: 0.35em 0.5em; font-size: 0.8rem; color: #e5e7eb; background: #0b0e14; border: 1px solid #2a3140; border-radius: 6px; outline: none; cursor: pointer; }
   select:focus { border-color: #f97316; }
   .srv-status { flex-shrink: 0; }
+  .np { display: flex; align-items: center; justify-content: space-between; gap: 0.6rem; }
+  .np-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .np-actions { display: flex; gap: 0.4rem; flex-shrink: 0; }
+  .mini { margin: 0; padding: 0.3em 0.7em; font-size: 0.75rem; font-weight: 600; background: transparent; color: #9ca3af; border: 1px solid #2a3140; border-radius: 6px; }
+  .mini:hover { color: #e5e7eb; border-color: #4b5563; background: transparent; }
   .code { font-size: 1.6rem; font-weight: 700; letter-spacing: 0.18em; color: #f97316; text-align: center; margin: 0.2rem 0; }
   .link { color: #fb923c; font-size: 0.85rem; word-break: break-all; }
   .muted { color: #6b7280; font-size: 0.85rem; margin: 0; }

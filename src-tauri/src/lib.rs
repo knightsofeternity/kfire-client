@@ -33,6 +33,8 @@ pub struct AppState {
     /// Stop senders, one per running server session (keyed by server_id).
     sessions: Mutex<HashMap<String, watch::Sender<bool>>>,
     notifications: mpsc::UnboundedSender<Notification>,
+    /// Scanner events channel, reused to push synthetic stops from the UI.
+    events: mpsc::UnboundedSender<crate::scanner::GameEvent>,
 }
 
 impl AppState {
@@ -117,6 +119,20 @@ impl AppState {
             self.start_session(server_id);
         }
     }
+
+    /// Pushes a synthetic stop for `slug` to every server that has it, reusing
+    /// the scanner's events channel (so it goes through the same queue/WS path).
+    fn emit_game_stopped(&self, slug: &str) {
+        let now = chrono::Utc::now();
+        for (server_id, slug) in self.scanner.servers_for_slug(slug) {
+            let _ = self.events.send(crate::scanner::GameEvent {
+                started: false,
+                server_id,
+                game_slug: slug,
+                ts: now,
+            });
+        }
+    }
 }
 
 // --- Tauri commands ---------------------------------------------------------
@@ -136,10 +152,18 @@ pub struct UiState {
     logged_in: bool,
     games_count: i64,
     running: Vec<RunningGame>,
+    ignored: Vec<IgnoredGame>,
 }
 
 #[derive(serde::Serialize)]
 pub struct RunningGame {
+    slug: String,
+    name: String,
+}
+
+#[derive(serde::Serialize)]
+pub struct IgnoredGame {
+    server_id: String,
     slug: String,
     name: String,
 }
@@ -340,6 +364,19 @@ fn get_state(state: tauri::State<'_, AppState>) -> UiState {
         .map(|(slug, name)| RunningGame { slug, name })
         .collect();
 
+    let names = state.scanner.names.read().unwrap();
+    let ignored = state
+        .db
+        .list_ignored()
+        .into_iter()
+        .map(|(server_id, slug)| IgnoredGame {
+            name: names.get(&slug).cloned().unwrap_or_else(|| slug.clone()),
+            server_id,
+            slug,
+        })
+        .collect();
+    drop(names);
+
     UiState {
         global_status: state
             .db
@@ -349,6 +386,33 @@ fn get_state(state: tauri::State<'_, AppState>) -> UiState {
         games_count: state.db.games_count(),
         servers,
         running,
+        ignored,
+    }
+}
+
+/// Stops a currently-detected game: suppresses it until its process exits and
+/// pushes a synthetic stop so every server sees it end now.
+#[tauri::command]
+fn stop_game(state: tauri::State<'_, AppState>, slug: String) {
+    state.scanner.suppress_slug(&slug);
+    state.emit_game_stopped(&slug);
+}
+
+/// Toggles a game on the persistent ignore list. When ignoring, also suppress
+/// and stop it immediately so it disappears from the running set right away.
+#[tauri::command]
+fn ignore_game(state: tauri::State<'_, AppState>, slug: String, ignored: bool) {
+    for (sid, s) in state.scanner.servers_for_slug(&slug) {
+        if ignored {
+            state.db.add_ignored(&sid, &s);
+        } else {
+            state.db.remove_ignored(&sid, &s);
+        }
+    }
+    state.scanner.reload_ignored(&state.db.list_ignored());
+    if ignored {
+        state.scanner.suppress_slug(&slug);
+        state.emit_game_stopped(&slug);
     }
 }
 
@@ -614,7 +678,9 @@ pub fn run() {
             set_global_status,
             set_server_status,
             get_autostart,
-            set_autostart
+            set_autostart,
+            stop_game,
+            ignore_game
         ])
         .setup(|app| {
             // --- local cache -------------------------------------------------
@@ -627,7 +693,7 @@ pub fn run() {
             scanner_state.load_catalog(&db.load_games());
             scanner_state.reload_ignored(&db.list_ignored());
             let (event_tx, mut event_rx) = mpsc::unbounded_channel();
-            scanner::spawn(scanner_state.clone(), event_tx);
+            scanner::spawn(scanner_state.clone(), event_tx.clone());
 
             // Last WS status per server, shared with the notification loop.
             let conn_status: Arc<Mutex<HashMap<String, String>>> =
@@ -664,6 +730,7 @@ pub fn run() {
                 conn_status,
                 sessions: Mutex::new(HashMap::new()),
                 notifications: notif_tx,
+                events: event_tx,
             };
 
             // --- scanner events → SQLite queue → WS tasks ----------------------
