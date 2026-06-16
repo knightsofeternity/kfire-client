@@ -82,10 +82,35 @@ impl AppState {
         crate::status::effective_status(&global, &over)
     }
 
+    /// Pushes a server's effective presence status to the server over REST,
+    /// using its stored access token. Lets a status change take effect
+    /// immediately even when the WS is already open, and persists `offline`
+    /// server-side before the socket closes.
+    fn push_presence_status(&self, server_id: &str) {
+        let status = self.effective_status(server_id);
+        let server = match self.db.get_server(server_id) {
+            Some(s) => s,
+            None => return,
+        };
+        let token = match self.access_tokens.lock().unwrap().get(server_id).cloned() {
+            Some(t) => t,
+            None => return,
+        };
+        let server_id = server_id.to_string();
+        tauri::async_runtime::spawn(async move {
+            let api = crate::api::ApiClient::new(&server.url);
+            if let Err(e) = api.set_presence_status(&token, &status).await {
+                log::warn!("push presence_status[{server_id}] failed: {e}");
+            }
+        });
+    }
+
     /// (Re)starts or stops a server's session to match its effective status.
     /// Offline → stop; online/invisible → (re)start so the WS task re-applies
-    /// activity visibility on connect.
+    /// the presence status on connect. Pushes the new status over REST first so
+    /// the change takes effect immediately (and offline persists before close).
     fn apply_server_status(&self, server_id: &str) {
+        self.push_presence_status(server_id);
         if self.effective_status(server_id) == "offline" {
             self.stop_session(server_id);
         } else {

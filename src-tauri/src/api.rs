@@ -216,17 +216,13 @@ impl ApiClient {
         .await
     }
 
-    /// Sets the owner's activity visibility (the `invisible` vs `online` status).
-    pub async fn set_activity_visible(
-        &self,
-        access_token: &str,
-        visible: bool,
-    ) -> Result<(), ApiError> {
+    /// Sets the owner's chosen presence status (online | invisible | offline).
+    pub async fn set_presence_status(&self, access_token: &str, status: &str) -> Result<(), ApiError> {
         let resp = self
             .http
             .patch(format!("{}/api/v1/users/me", self.base_url))
             .bearer_auth(access_token)
-            .json(&serde_json::json!({ "activity_visible": visible }))
+            .json(&serde_json::json!({ "presence_status": status }))
             .send()
             .await
             .map_err(|e| ApiError::Network(e.to_string()))?;
@@ -235,7 +231,7 @@ impl ApiClient {
         } else {
             Err(ApiError::Server {
                 code: "patch_failed".into(),
-                message: format!("set activity_visible failed: HTTP {}", resp.status()),
+                message: format!("set presence_status failed: HTTP {}", resp.status()),
             })
         }
     }

@@ -195,18 +195,18 @@ impl WsTask {
         log::info!("ws[{}]: connected to {url}", self.server_id);
         self.status("connected", "");
 
-        // --- apply the effective status (online vs invisible) ----------------
+        // --- apply the chosen presence status (online | invisible) -----------
         // Offline servers never get here (their session is not started), so the
-        // effective status is online or invisible: report visibly or hidden.
+        // effective status resolves to online or invisible.
         let server_override = self
             .db
             .get_server(&self.server_id)
             .map(|s| s.status_override)
             .unwrap_or_default();
         let global = self.db.get_setting("global_status").unwrap_or_default();
-        let visible = crate::status::effective_status(&global, &server_override) == "online";
-        if let Err(e) = api.set_activity_visible(access, visible).await {
-            log::warn!("ws[{}]: set activity_visible failed: {e}", self.server_id);
+        let status = crate::status::effective_status(&global, &server_override);
+        if let Err(e) = api.set_presence_status(access, &status).await {
+            log::warn!("ws[{}]: set presence_status failed: {e}", self.server_id);
         }
 
         // --- catalog refresh (uses the still-fresh access token) -------------
