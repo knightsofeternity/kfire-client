@@ -59,6 +59,11 @@ impl Db {
                  org_name        TEXT NOT NULL DEFAULT '',
                  status_override TEXT NOT NULL DEFAULT 'inherit',
                  created_at      TEXT NOT NULL
+             );
+             CREATE TABLE IF NOT EXISTS ignored_games (
+                 server_id TEXT NOT NULL,
+                 slug      TEXT NOT NULL,
+                 PRIMARY KEY (server_id, slug)
              );",
         )?;
 
@@ -299,6 +304,37 @@ impl Db {
         let conn = self.conn.lock().unwrap();
         conn.query_row("SELECT count(*) FROM games", [], |r| r.get(0))
             .unwrap_or(0)
+    }
+
+    // --- ignored games (per server) ----------------------------------------
+
+    /// Every `(server_id, slug)` pair the user has chosen to ignore.
+    pub fn list_ignored(&self) -> Vec<(String, String)> {
+        let conn = self.conn.lock().unwrap();
+        let Ok(mut stmt) = conn.prepare("SELECT server_id, slug FROM ignored_games") else {
+            return Vec::new();
+        };
+        let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)));
+        match rows {
+            Ok(it) => it.flatten().collect(),
+            Err(_) => Vec::new(),
+        }
+    }
+
+    pub fn add_ignored(&self, server_id: &str, slug: &str) {
+        let conn = self.conn.lock().unwrap();
+        let _ = conn.execute(
+            "INSERT OR IGNORE INTO ignored_games (server_id, slug) VALUES (?1, ?2)",
+            params![server_id, slug],
+        );
+    }
+
+    pub fn remove_ignored(&self, server_id: &str, slug: &str) {
+        let conn = self.conn.lock().unwrap();
+        let _ = conn.execute(
+            "DELETE FROM ignored_games WHERE server_id = ?1 AND slug = ?2",
+            params![server_id, slug],
+        );
     }
 
     // --- offline event queue (per server) ----------------------------------
