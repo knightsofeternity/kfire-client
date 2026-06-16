@@ -126,8 +126,12 @@ impl ScannerState {
         let index = self.exe_index.read().unwrap();
         let running = self.running.read().unwrap();
         let ignored = self.ignored.read().unwrap();
+        let suppressed = self.suppressed.read().unwrap();
         let mut slugs = Vec::new();
         for exe in running.iter() {
+            if suppressed.contains(exe) {
+                continue;
+            }
             if let Some(pairs) = index.get(exe) {
                 for (sid, slug) in pairs {
                     if sid == server_id && !ignored.contains(&(sid.clone(), slug.clone())) {
@@ -145,9 +149,13 @@ impl ScannerState {
         let names = self.names.read().unwrap();
         let running = self.running.read().unwrap();
         let ignored = self.ignored.read().unwrap();
+        let suppressed = self.suppressed.read().unwrap();
         let mut seen = HashSet::new();
         let mut out = Vec::new();
         for exe in running.iter() {
+            if suppressed.contains(exe) {
+                continue;
+            }
             if let Some(pairs) = index.get(exe) {
                 // Show the game only via a pair the user has not ignored.
                 if let Some((_, slug)) = pairs
