@@ -1,6 +1,6 @@
 [package]
 name = "kfire-client"
-version = "0.3.1"
+version = "0.3.2"
 description = "KFIRE desktop client - lightweight tray app that detects running games and reports presence to your org's KFIRE server"
 authors = ["Knights of Eternity"]
 license = "MIT"
@@ -22,6 +22,9 @@ tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-opener = "2"
 # Launch-at-login (registry on Windows, LaunchAgent on macOS, .desktop on Linux)
 tauri-plugin-autostart = "2"
+# Single-instance guard: a second launch focuses the running app instead of
+# spawning another process (and another tray icon).
+tauri-plugin-single-instance = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # Local process scanning (game detection)

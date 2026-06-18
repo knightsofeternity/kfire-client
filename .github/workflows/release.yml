@@ -71,10 +71,9 @@ jobs:
           releaseBody: |
             KFIRE desktop client. Download the installer for your platform below.
 
-            **New in this version:** a fix for game detection on anti-cheat titles
-            (PUBG and other BattlEye/EAC games) that could otherwise be reported as a
-            burst of very short sessions. Idle detection no longer flaps a running
-            game on and off.
+            **New in this version:** KFIRE now runs as a single instance. Launching
+            it again brings the running app to the front instead of starting another
+            copy, so you no longer end up with several KFIRE icons in your tray.
 
             **On first launch:** enter your organization's KFIRE server address, then
             approve the device in the browser - no password needed.
