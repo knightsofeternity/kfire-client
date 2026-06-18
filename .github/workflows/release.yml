@@ -71,10 +71,10 @@ jobs:
           releaseBody: |
             KFIRE desktop client. Download the installer for your platform below.
 
-            **New in this version:** your Online / Invisible / Offline status now
-            applies live (invisible keeps recording your playtime while showing you
-            offline to others); a "Stop" / "Always ignore" control to fix a wrong
-            game detection; and idle launchers left open no longer keep you "in game".
+            **New in this version:** a fix for game detection on anti-cheat titles
+            (PUBG and other BattlEye/EAC games) that could otherwise be reported as a
+            burst of very short sessions. Idle detection no longer flaps a running
+            game on and off.
 
             **On first launch:** enter your organization's KFIRE server address, then
             approve the device in the browser - no password needed.

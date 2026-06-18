@@ -20,20 +20,28 @@ const SCAN_INTERVAL: Duration = Duration::from_secs(5);
 const CPU_ACTIVE_THRESHOLD: f32 = 1.0; // summed CPU% across the basename's processes
 const IDLE_SCANS_TO_DROP: u32 = 3; // ~15s at the 5s scan interval
 
-/// Whether a matched exe counts as "playing". START is never CPU-gated; a
-/// process already running is dropped only after IDLE_SCANS_TO_DROP consecutive
-/// idle scans. Any CPU activity resets the idle counter.
+/// Whether a matched exe counts as "playing".
+///
+/// A process is dropped only after IDLE_SCANS_TO_DROP consecutive scans with a
+/// genuine low CPU reading. The following always count as active and reset the
+/// idle counter:
+/// - CPU at or above the threshold (real activity);
+/// - CPU exactly 0.0 on a present process: anti-cheat protected games
+///   (BattlEye/EAC, e.g. PUBG) report 0.0 to an unprivileged scanner, so 0.0
+///   means "unreadable", not "idle". Counting it as idle shredded real play
+///   into hundreds of sub-minute sessions;
+/// - a process not present on the previous scan (a genuinely new launch):
+///   started ungated. `present_before` is the raw presence of the prior scan,
+///   NOT the effective "playing" set, so a process the idle gate just dropped
+///   while it is still running is not re-started next scan (no on/off flapping).
 fn is_active(
     exe: &str,
-    was_running: bool,
+    present_before: bool,
     cpu: f32,
     idle: &mut std::collections::HashMap<String, u32>,
 ) -> bool {
-    if cpu >= CPU_ACTIVE_THRESHOLD {
+    if cpu >= CPU_ACTIVE_THRESHOLD || cpu == 0.0 || !present_before {
         idle.remove(exe);
-        return true;
-    }
-    if !was_running {
         return true;
     }
     let n = idle.entry(exe.to_string()).or_insert(0);
@@ -185,6 +193,10 @@ fn run(state: Arc<ScannerState>, events: UnboundedSender<GameEvent>) {
     let mut sys = System::new();
     // Per-basename consecutive-idle-scan counter; persists across scans.
     let mut idle: HashMap<String, u32> = HashMap::new();
+    // Raw set of matched basenames present on the previous scan. Used to tell a
+    // genuinely new launch (start ungated) from a process the idle gate dropped
+    // but which is still running (must stay dropped, not flap back on).
+    let mut prev_present: HashSet<String> = HashSet::new();
 
     loop {
         sys.refresh_processes_specifics(
@@ -217,13 +229,12 @@ fn run(state: Arc<ScannerState>, events: UnboundedSender<GameEvent>) {
         // Compute the new effective ("playing") set: present + CPU-active +
         // not user-suppressed. START is never CPU-gated (see is_active).
         let seen_effective: HashSet<String> = {
-            let prev = state.running.read().unwrap();
             let suppressed = state.suppressed.read().unwrap();
             present
                 .iter()
                 .filter(|exe| {
                     let cpu = cpu_sum.get(*exe).copied().unwrap_or(0.0);
-                    is_active(exe, prev.contains(*exe), cpu, &mut idle)
+                    is_active(exe, prev_present.contains(*exe), cpu, &mut idle)
                         && !suppressed.contains(*exe)
                 })
                 .cloned()
@@ -282,6 +293,7 @@ fn run(state: Arc<ScannerState>, events: UnboundedSender<GameEvent>) {
         }
 
         *state.running.write().unwrap() = seen_effective;
+        prev_present = present;
         thread::sleep(SCAN_INTERVAL);
     }
 }
@@ -300,19 +312,45 @@ mod tests {
     }
 
     #[test]
-    fn cpu_gate_drops_after_sustained_idle_not_on_first() {
+    fn idle_gate_drops_after_sustained_low_cpu_not_on_first() {
+        // Low-but-nonzero CPU (below threshold, not the 0.0 "unreadable" value).
         let mut idle: std::collections::HashMap<String, u32> = Default::default();
-        assert!(is_active("g.exe", true, 0.0, &mut idle)); // running, idle #1 -> keep
-        assert!(is_active("g.exe", true, 0.0, &mut idle)); // idle #2 -> keep
-        assert!(!is_active("g.exe", true, 0.0, &mut idle)); // idle #3 -> drop
+        assert!(is_active("g.exe", true, 0.5, &mut idle)); // idle #1 -> keep
+        assert!(is_active("g.exe", true, 0.5, &mut idle)); // idle #2 -> keep
+        assert!(!is_active("g.exe", true, 0.5, &mut idle)); // idle #3 -> drop
         assert!(is_active("g.exe", true, 5.0, &mut idle)); // CPU back -> active, counter reset
-        assert!(is_active("g.exe", true, 0.0, &mut idle)); // idle #1 again (reset worked)
+        assert!(is_active("g.exe", true, 0.5, &mut idle)); // idle #1 again (reset worked)
     }
 
     #[test]
-    fn cpu_gate_does_not_gate_start() {
+    fn new_process_starts_ungated() {
+        // A genuinely new launch (not present last scan) starts regardless of CPU.
         let mut idle = Default::default();
-        assert!(is_active("g.exe", false, 0.0, &mut idle)); // freshly seen, idle -> still starts
+        assert!(is_active("g.exe", false, 0.5, &mut idle));
+    }
+
+    #[test]
+    fn zero_cpu_is_active_not_idle() {
+        // Anti-cheat protected games (PUBG/BattlEye) report 0.0 CPU to an
+        // unprivileged scanner; that must count as active, never accrue idle.
+        let mut idle = Default::default();
+        for _ in 0..10 {
+            assert!(is_active("tslgame.exe", true, 0.0, &mut idle));
+        }
+        assert!(idle.is_empty());
+    }
+
+    #[test]
+    fn dropped_process_stays_dropped_no_flap() {
+        // Regression: once dropped for sustained low CPU, a still-present process
+        // must not restart the next scan (present_before stays true), so we never
+        // get the on/off flapping that littered the history with micro-sessions.
+        let mut idle = Default::default();
+        assert!(is_active("g.exe", true, 0.5, &mut idle)); // idle #1
+        assert!(is_active("g.exe", true, 0.5, &mut idle)); // idle #2
+        assert!(!is_active("g.exe", true, 0.5, &mut idle)); // idle #3 -> drop
+        assert!(!is_active("g.exe", true, 0.5, &mut idle)); // stays dropped
+        assert!(!is_active("g.exe", true, 0.5, &mut idle)); // stays dropped (no flap)
     }
 
     #[test]
