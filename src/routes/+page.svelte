@@ -1,6 +1,8 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
   import { listen } from "@tauri-apps/api/event";
+  import { getVersion } from "@tauri-apps/api/app";
+  import { openUrl } from "@tauri-apps/plugin-opener";
   import { onMount } from "svelte";
 
   type RunningGame = { slug: string; name: string };
@@ -31,6 +33,31 @@
   let linking = $state(false);
   let adding = $state(false);
   let pairing = $state<LinkInfo | null>(null);
+
+  type UpdateInfo = {
+    current: string;
+    latest: string | null;
+    update_available: boolean;
+    releases_url: string;
+  };
+
+  // Installed version (instant, local) and best-effort update status.
+  let appVersion = $state("");
+  let update = $state<UpdateInfo | null>(null);
+
+  async function checkForUpdate() {
+    try {
+      appVersion = await getVersion();
+    } catch (e) {
+      console.warn("getVersion failed", e);
+    }
+    try {
+      // One cached, short-timeout GET; runs only when this window mounts.
+      update = await invoke<UpdateInfo>("check_for_update");
+    } catch (e) {
+      console.warn("check_for_update failed", e);
+    }
+  }
 
   async function refreshAutostart() {
     try {
@@ -77,6 +104,7 @@
 
   onMount(() => {
     refreshState();
+    checkForUpdate();
     const interval = setInterval(refreshState, 4000);
     const unsubs = [
       listen<StatusEvent>("kfire://status", (e) => {
@@ -270,7 +298,23 @@
     </section>
   {/if}
 
-  <footer><p>Runs in the tray - closing this window keeps KFIRE running.</p></footer>
+  <footer>
+    <p class="version">
+      <span>KFIRE{appVersion ? ` v${appVersion}` : ""}</span>
+      {#if update?.update_available && update.latest}
+        <button
+          type="button"
+          class="version-link"
+          onclick={() => update && openUrl(update.releases_url)}
+        >
+          {update.latest} available
+        </button>
+      {:else if update?.latest}
+        <span class="up-to-date">up to date</span>
+      {/if}
+    </p>
+    <p>Runs in the tray - closing this window keeps KFIRE running.</p>
+  </footer>
 </main>
 
 <style>
@@ -323,6 +367,11 @@
   .error { color: #ef4444; font-size: 0.85rem; margin: 0; }
   .toggle { flex-direction: row; align-items: center; gap: 0.5rem; cursor: pointer; color: #9ca3af; font-size: 0.85rem; margin-top: 0.4rem; }
   .toggle input { accent-color: #f97316; width: 1rem; height: 1rem; cursor: pointer; }
-  footer { margin-top: auto; }
+  footer { margin-top: auto; display: flex; flex-direction: column; gap: 0.3rem; }
   footer p { margin: 0; font-size: 0.75rem; color: #4b5563; text-align: center; }
+  .version { display: flex; align-items: center; justify-content: center; gap: 0.5rem; color: #6b7280; }
+  .version > span:first-child { letter-spacing: 0.04em; }
+  .version-link { margin: 0; padding: 0; font-size: 0.75rem; font-weight: 600; color: #f97316; background: transparent; border: none; cursor: pointer; }
+  .version-link:hover { color: #fb923c; background: transparent; text-decoration: underline; }
+  .up-to-date { color: #22c55e; }
 </style>

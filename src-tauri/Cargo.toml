@@ -1,6 +1,6 @@
 [package]
 name = "kfire-client"
-version = "0.3.2"
+version = "0.3.3"
 description = "KFIRE desktop client - lightweight tray app that detects running games and reports presence to your org's KFIRE server"
 authors = ["Knights of Eternity"]
 license = "MIT"

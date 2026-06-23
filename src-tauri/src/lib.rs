@@ -2,6 +2,7 @@ pub mod api;
 pub mod db;
 pub mod scanner;
 pub mod status;
+pub mod update;
 pub mod ws;
 
 use std::collections::HashMap;
@@ -690,7 +691,8 @@ pub fn run() {
             get_autostart,
             set_autostart,
             stop_game,
-            ignore_game
+            ignore_game,
+            update::check_for_update
         ])
         .setup(|app| {
             // --- local cache -------------------------------------------------
