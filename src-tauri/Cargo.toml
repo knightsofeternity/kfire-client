@@ -28,7 +28,7 @@ tauri-plugin-single-instance = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # Local process scanning (game detection)
-sysinfo = "0.33"
+sysinfo = "0.39"
 # Local cache: settings, games catalog, offline event queue
 rusqlite = { version = "0.32", features = ["bundled"] }
 # REST control plane (login, refresh, games download)
