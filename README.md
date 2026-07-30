@@ -48,7 +48,11 @@ never typed into the desktop app, and the link is bound to this specific device.
 
 - Runs in the **system tray**, lightweight
 - Scans local processes every 5 s ([`sysinfo`](https://crates.io/crates/sysinfo)) and
-  matches them against the catalogs downloaded from your servers (cached in SQLite)
+  matches them against the catalogs downloaded from your servers (cached in SQLite),
+  by executable name and, for games whose binary name is too generic to identify
+  anything (`game.exe` and friends), by install folder. **Executable paths are read
+  and compared on your machine only** - they are never sent anywhere. A server only
+  ever learns which game started or stopped.
 - Pushes `game_started` / `game_stopped` over WebSocket, with heartbeat,
   exponential-backoff reconnection and an **offline queue** (events made while offline are
   flushed on reconnect)
@@ -72,7 +76,7 @@ src/                       Svelte UI (link flow, servers, status, detected games
 src-tauri/src/lib.rs       app wiring: state, commands, tray menu/icon, sessions
 src-tauri/src/api.rs       REST client (pairing, refresh, games, activity visibility)
 src-tauri/src/db.rs        SQLite cache (settings, linked servers, catalogs, offline queue)
-src-tauri/src/scanner.rs   process scan loop (exe → [(server, slug)])
+src-tauri/src/scanner.rs   process scan loop (exe name or install path → [(server, slug)])
 src-tauri/src/ws.rs        per-server WebSocket task (hello, heartbeat, backoff, drain)
 src-tauri/src/status.rs    status model (online/invisible/offline) + tray icon state
 ```

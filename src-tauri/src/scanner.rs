@@ -1,9 +1,19 @@
 //! Local game detection: scans running processes on a fixed interval and
-//! matches them against the cached games catalogs (exe basename → games).
+//! matches them against the cached games catalogs.
+//!
+//! A catalog entry is matched in one of two ways:
+//! - a plain **basename** (`subnautica.exe`), compared to the process name;
+//! - a **qualified path pattern** (`counter-strike source/hl2.exe`), matched as
+//!   a suffix of the process's full path. The server publishes this form for
+//!   games whose binary name is too generic to identify anything on its own
+//!   (`game.exe`, `hl2.exe`), which is the only way they can be detected.
+//!
+//! Paths are read locally and compared locally: they never leave the machine,
+//! only game slugs are reported to servers.
 //!
 //! One scanner is shared across every linked server: you play one game, and it
 //! is reported to each server that knows it, using that server's own slug. The
-//! match index therefore maps an executable to a list of `(server_id, slug)`
+//! match index therefore maps a catalog entry to a list of `(server_id, slug)`
 //! pairs, and each detection fans out into one [`GameEvent`] per pair.
 
 use std::collections::{HashMap, HashSet};
@@ -11,7 +21,7 @@ use std::sync::{Arc, RwLock};
 use std::thread;
 use std::time::Duration;
 
-use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System};
+use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
 use tokio::sync::mpsc::UnboundedSender;
 
 /// How often we scan the process table.
@@ -49,6 +59,50 @@ fn is_active(
     *n < IDLE_SCANS_TO_DROP
 }
 
+/// Lowercases a process executable path and unifies separators, so Windows
+/// paths compare against the forward-slash patterns the catalog ships.
+fn normalize_path(raw: &str) -> String {
+    raw.replace('\\', "/").to_lowercase()
+}
+
+/// Whether a normalized process `path` ends with a catalog `pattern`, aligned
+/// on a directory boundary. The boundary check is what keeps
+/// "my dragon ball gekishin squadra/game.exe" from matching the real game.
+fn matches_pattern(path: &str, pattern: &str) -> bool {
+    if pattern.is_empty() || !path.ends_with(pattern) {
+        return false;
+    }
+    let head = path.len() - pattern.len();
+    head == 0 || path.as_bytes()[head - 1] == b'/'
+}
+
+/// Catalog keys a running process matches: its basename when the catalog knows
+/// it, plus every qualified pattern whose suffix the process path satisfies. A
+/// process legitimately yields two keys when one game is listed by basename and
+/// another by a pattern ending in the same file name.
+///
+/// `path` is `None` when the executable path could not be read (permissions),
+/// in which case only basename matching applies, exactly as before v0.4.0.
+fn process_keys(
+    name: &str,
+    path: Option<&str>,
+    key_index: &HashMap<String, Vec<(String, String)>>,
+    patterns_by_basename: &HashMap<String, Vec<String>>,
+) -> Vec<String> {
+    let mut keys = Vec::new();
+    if key_index.contains_key(name) {
+        keys.push(name.to_string());
+    }
+    if let (Some(path), Some(candidates)) = (path, patterns_by_basename.get(name)) {
+        for pattern in candidates {
+            if matches_pattern(path, pattern) {
+                keys.push(pattern.clone());
+            }
+        }
+    }
+    keys
+}
+
 /// A presence event produced by the scanner, addressed to one server.
 #[derive(Debug, Clone)]
 pub struct GameEvent {
@@ -61,15 +115,19 @@ pub struct GameEvent {
 /// Shared state between the scanner, the WS tasks and the UI.
 #[derive(Default)]
 pub struct ScannerState {
-    /// exe basename (lowercase) → [(server_id, slug)]. Rebuilt from the cache.
-    pub exe_index: RwLock<HashMap<String, Vec<(String, String)>>>,
+    /// Catalog entry (lowercase basename or path pattern) → [(server_id, slug)].
+    /// Rebuilt from the cache; every downstream set is keyed by these strings.
+    pub key_index: RwLock<HashMap<String, Vec<(String, String)>>>,
+    /// Pattern basename → the patterns ending with it, so a process only ever
+    /// suffix-checks the handful of patterns that could possibly match it.
+    pub patterns_by_basename: RwLock<HashMap<String, Vec<String>>>,
     /// slug → display name, for the UI (merged across servers).
     pub names: RwLock<HashMap<String, String>>,
-    /// exe basenames currently detected as running (the effective "playing" set).
+    /// Catalog keys currently detected as running (the effective "playing" set).
     pub running: RwLock<HashSet<String>>,
     /// `(server_id, slug)` pairs the user has chosen to ignore (never reported).
     pub ignored: RwLock<HashSet<(String, String)>>,
-    /// exe basenames the user has "stopped"; suppressed until the process exits.
+    /// Catalog keys the user has "stopped"; suppressed until the process exits.
     pub suppressed: RwLock<HashSet<String>>,
 }
 
@@ -77,6 +135,7 @@ impl ScannerState {
     /// Rebuilds the matching index from every server's cached catalog.
     pub fn load_catalog(&self, games: &[(String, crate::db::CachedGame)]) {
         let mut index: HashMap<String, Vec<(String, String)>> = HashMap::new();
+        let mut patterns: HashMap<String, Vec<String>> = HashMap::new();
         let mut names = HashMap::new();
         for (server_id, g) in games {
             for exe in &g.executable_names {
@@ -84,15 +143,23 @@ impl ScannerState {
                     .entry(exe.clone())
                     .or_default()
                     .push((server_id.clone(), g.slug.clone()));
+                if let Some((_, base)) = exe.rsplit_once('/') {
+                    let candidates = patterns.entry(base.to_string()).or_default();
+                    if !candidates.contains(exe) {
+                        candidates.push(exe.clone());
+                    }
+                }
             }
             names.insert(g.slug.clone(), g.name.clone());
         }
         log::info!(
-            "scanner: catalog loaded ({} games, {} executables)",
+            "scanner: catalog loaded ({} games, {} entries, {} path patterns)",
             names.len(),
-            index.len()
+            index.len(),
+            patterns.values().map(Vec::len).sum::<usize>()
         );
-        *self.exe_index.write().unwrap() = index;
+        *self.key_index.write().unwrap() = index;
+        *self.patterns_by_basename.write().unwrap() = patterns;
         *self.names.write().unwrap() = names;
     }
 
@@ -105,7 +172,7 @@ impl ScannerState {
     /// reported until the underlying process exits. Used when the user "stops"
     /// a running game from the UI.
     pub fn suppress_slug(&self, slug: &str) {
-        let index = self.exe_index.read().unwrap();
+        let index = self.key_index.read().unwrap();
         let mut suppressed = self.suppressed.write().unwrap();
         for (exe, pairs) in index.iter() {
             if pairs.iter().any(|(_, s)| s == slug) {
@@ -116,7 +183,7 @@ impl ScannerState {
 
     /// All `(server_id, slug)` pairs that map to this slug (deduplicated).
     pub fn servers_for_slug(&self, slug: &str) -> Vec<(String, String)> {
-        let index = self.exe_index.read().unwrap();
+        let index = self.key_index.read().unwrap();
         let mut seen = HashSet::new();
         let mut out = Vec::new();
         for pairs in index.values() {
@@ -131,7 +198,7 @@ impl ScannerState {
 
     /// Slugs of the given server's games that are currently running.
     pub fn running_for(&self, server_id: &str) -> Vec<String> {
-        let index = self.exe_index.read().unwrap();
+        let index = self.key_index.read().unwrap();
         let running = self.running.read().unwrap();
         let ignored = self.ignored.read().unwrap();
         let suppressed = self.suppressed.read().unwrap();
@@ -153,7 +220,7 @@ impl ScannerState {
 
     /// Currently-running games as `(slug, name)` for the UI, one per game.
     pub fn running_games(&self) -> Vec<(String, String)> {
-        let index = self.exe_index.read().unwrap();
+        let index = self.key_index.read().unwrap();
         let names = self.names.read().unwrap();
         let running = self.running.read().unwrap();
         let ignored = self.ignored.read().unwrap();
@@ -202,13 +269,18 @@ fn run(state: Arc<ScannerState>, events: UnboundedSender<GameEvent>) {
         sys.refresh_processes_specifics(
             ProcessesToUpdate::All,
             true,
-            ProcessRefreshKind::nothing().with_cpu(),
+            // The executable path is read once per process and cached, and only
+            // consulted for names the catalog knows as a path pattern.
+            ProcessRefreshKind::nothing()
+                .with_cpu()
+                .with_exe(UpdateKind::OnlyIfNotSet),
         );
 
-        // Summed CPU% per matched basename, plus the set of matched basenames
-        // actually present in the process table this scan.
+        // Summed CPU% per matched catalog key, plus the set of keys actually
+        // present in the process table this scan.
         let (cpu_sum, present): (HashMap<String, f32>, HashSet<String>) = {
-            let index = state.exe_index.read().unwrap();
+            let index = state.key_index.read().unwrap();
+            let patterns = state.patterns_by_basename.read().unwrap();
             if index.is_empty() {
                 // No catalog downloaded yet: nothing to match.
                 thread::sleep(SCAN_INTERVAL);
@@ -218,9 +290,14 @@ fn run(state: Arc<ScannerState>, events: UnboundedSender<GameEvent>) {
             let mut present: HashSet<String> = HashSet::new();
             for p in sys.processes().values() {
                 let name = p.name().to_string_lossy().to_lowercase();
-                if index.contains_key(&name) {
-                    *cpu_sum.entry(name.clone()).or_insert(0.0) += p.cpu_usage();
-                    present.insert(name);
+                let path = if patterns.contains_key(&name) {
+                    p.exe().map(|e| normalize_path(&e.to_string_lossy()))
+                } else {
+                    None
+                };
+                for key in process_keys(&name, path.as_deref(), &index, &patterns) {
+                    *cpu_sum.entry(key.clone()).or_insert(0.0) += p.cpu_usage();
+                    present.insert(key);
                 }
             }
             (cpu_sum, present)
@@ -260,7 +337,7 @@ fn run(state: Arc<ScannerState>, events: UnboundedSender<GameEvent>) {
         // skipping any (server_id, slug) pair the user has ignored.
         let now = chrono::Utc::now();
         {
-            let index = state.exe_index.read().unwrap();
+            let index = state.key_index.read().unwrap();
             let ignored = state.ignored.read().unwrap();
             for exe in &started {
                 for (server_id, slug) in index.get(exe).into_iter().flatten() {
@@ -354,6 +431,147 @@ mod tests {
     }
 
     #[test]
+    fn pattern_matches_on_segment_boundary_only() {
+        let p = "dragon ball gekishin squadra/game.exe";
+        assert!(matches_pattern(
+            "c:/steam/steamapps/common/dragon ball gekishin squadra/game.exe",
+            p
+        ));
+        // The whole path may be exactly the pattern.
+        assert!(matches_pattern(p, p));
+        // A directory whose name merely ends with the pattern's first segment
+        // must not match.
+        assert!(!matches_pattern(
+            "c:/games/my dragon ball gekishin squadra/game.exe",
+            p
+        ));
+        // Same basename, different game.
+        assert!(!matches_pattern("c:/steam/common/some other game/game.exe", p));
+        assert!(!matches_pattern("game.exe", p));
+    }
+
+    #[test]
+    fn process_path_is_normalized_before_matching() {
+        assert_eq!(
+            normalize_path(r"C:\Program Files\Alien Isolation\AI.exe"),
+            "c:/program files/alien isolation/ai.exe"
+        );
+    }
+
+    #[test]
+    fn process_keys_covers_basename_pattern_and_both() {
+        let s = ScannerState::default();
+        s.load_catalog(&[
+            ("srv".into(), game("subnautica", "subnautica.exe")),
+            ("srv".into(), game("gekishin", "dragon ball gekishin squadra/game.exe")),
+        ]);
+        let index = s.key_index.read().unwrap();
+        let patterns = s.patterns_by_basename.read().unwrap();
+
+        // Plain basename.
+        assert_eq!(
+            process_keys("subnautica.exe", Some("d:/games/subnautica/subnautica.exe"), &index, &patterns),
+            vec!["subnautica.exe".to_string()]
+        );
+        // Pattern only: the basename alone is not in the index.
+        assert_eq!(
+            process_keys(
+                "game.exe",
+                Some("d:/steamapps/common/dragon ball gekishin squadra/game.exe"),
+                &index,
+                &patterns
+            ),
+            vec!["dragon ball gekishin squadra/game.exe".to_string()]
+        );
+        // Same basename in the wrong directory: no key at all.
+        assert!(process_keys("game.exe", Some("d:/games/unrelated/game.exe"), &index, &patterns).is_empty());
+        // Unreadable path (permissions): fall back to basename matching only.
+        assert!(process_keys("game.exe", None, &index, &patterns).is_empty());
+        assert_eq!(
+            process_keys("subnautica.exe", None, &index, &patterns),
+            vec!["subnautica.exe".to_string()]
+        );
+    }
+
+    #[test]
+    fn a_process_can_match_a_basename_and_a_pattern_at_once() {
+        let s = ScannerState::default();
+        s.load_catalog(&[
+            ("srv".into(), game("plain", "game.exe")),
+            ("srv".into(), game("qualified", "some game/game.exe")),
+        ]);
+        let index = s.key_index.read().unwrap();
+        let patterns = s.patterns_by_basename.read().unwrap();
+        let keys = process_keys("game.exe", Some("c:/x/some game/game.exe"), &index, &patterns);
+        assert_eq!(keys.len(), 2, "expected both keys, got {keys:?}");
+        assert!(keys.contains(&"game.exe".to_string()));
+        assert!(keys.contains(&"some game/game.exe".to_string()));
+    }
+
+    /// End-to-end on a real process: proves the refresh flags actually give us
+    /// an executable path, which is the assumption the whole pattern matching
+    /// rests on. Unix-only because it needs a binary to copy and run.
+    #[cfg(unix)]
+    #[test]
+    fn detects_a_real_running_process_by_its_install_directory() {
+        let root = std::env::temp_dir().join("kfire-scanner-test");
+        let dir = root.join("dragon ball gekishin squadra");
+        std::fs::create_dir_all(&dir).expect("create fake install dir");
+        let exe = dir.join("game.exe");
+        std::fs::copy("/bin/sleep", &exe).expect("copy a harmless binary");
+        let mut child = std::process::Command::new(&exe)
+            .arg("30")
+            .spawn()
+            .expect("run the fake game");
+        thread::sleep(Duration::from_millis(200)); // let it appear in the table
+
+        let state = ScannerState::default();
+        state.load_catalog(&[(
+            "srv".into(),
+            game("gekishin", "dragon ball gekishin squadra/game.exe"),
+        )]);
+
+        let mut sys = System::new();
+        sys.refresh_processes_specifics(
+            ProcessesToUpdate::All,
+            true,
+            ProcessRefreshKind::nothing()
+                .with_cpu()
+                .with_exe(UpdateKind::OnlyIfNotSet),
+        );
+        let matched = {
+            let index = state.key_index.read().unwrap();
+            let patterns = state.patterns_by_basename.read().unwrap();
+            sys.processes().values().any(|p| {
+                let name = p.name().to_string_lossy().to_lowercase();
+                let path = p.exe().map(|e| normalize_path(&e.to_string_lossy()));
+                process_keys(&name, path.as_deref(), &index, &patterns)
+                    .contains(&"dragon ball gekishin squadra/game.exe".to_string())
+            })
+        };
+
+        let _ = child.kill();
+        let _ = child.wait();
+        let _ = std::fs::remove_dir_all(&root);
+        assert!(matched, "the running game.exe should match its qualified pattern");
+    }
+
+    #[test]
+    fn suppressing_a_pattern_game_suppresses_its_pattern_key() {
+        let s = ScannerState::default();
+        s.load_catalog(&[(
+            "srv".into(),
+            game("gekishin", "dragon ball gekishin squadra/game.exe"),
+        )]);
+        s.suppress_slug("gekishin");
+        assert!(s
+            .suppressed
+            .read()
+            .unwrap()
+            .contains("dragon ball gekishin squadra/game.exe"));
+    }
+
+    #[test]
     fn ignored_pair_excluded_from_running_for() {
         let s = ScannerState::default();
         s.load_catalog(&[("srv-a".into(), game("a-game", "game.exe"))]);
@@ -378,7 +596,7 @@ mod tests {
             ("srv-b".into(), game("b-game", "game.exe")),
         ]);
 
-        let index = s.exe_index.read().unwrap();
+        let index = s.key_index.read().unwrap();
         let pairs = index.get("game.exe").unwrap();
         assert_eq!(pairs.len(), 2);
         assert!(pairs.contains(&("srv-a".into(), "a-game".into())));
