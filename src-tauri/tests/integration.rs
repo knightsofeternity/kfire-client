@@ -148,7 +148,7 @@ async fn full_presence_pipeline() {
     scanner.load_catalog(&catalog);
     assert!(
         scanner
-            .exe_index
+            .key_index
             .read()
             .unwrap()
             .contains_key("cs2.exe"),
