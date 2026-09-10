@@ -30,7 +30,7 @@ serde_json = "1"
 # Local process scanning (game detection)
 sysinfo = "0.33"
 # Local cache: settings, games catalog, offline event queue
-rusqlite = { version = "0.32", features = ["bundled"] }
+rusqlite = { version = "0.40", features = ["bundled"] }
 # REST control plane (login, refresh, games download)
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 # Real-time presence push (see kfire-protocol/websocket-events.md)
