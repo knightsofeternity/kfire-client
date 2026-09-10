@@ -150,7 +150,7 @@ impl WsTask {
     /// Sleeps `min(2^attempt s + jitter, 60 s)`. Returns true on shutdown.
     async fn backoff(&mut self, attempt: u32) -> bool {
         let base = 2u64.saturating_pow(attempt.min(6));
-        let jitter = rand::thread_rng().gen_range(0..1000);
+        let jitter = rand::rng().random_range(0..1000);
         let delay = Duration::from_millis((base * 1000 + jitter).min(60_000));
         log::info!("ws[{}]: retrying in {delay:?}", self.server_id);
         tokio::select! {
