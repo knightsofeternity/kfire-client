@@ -176,7 +176,7 @@ impl WsTask {
                 "client": format!("kfire-client/{} ({})", env!("CARGO_PKG_VERSION"), std::env::consts::OS),
             }),
         );
-        if let Err(e) = stream.send(Message::Text(hello)).await {
+        if let Err(e) = stream.send(Message::Text(hello.into())).await {
             return ServeEnd::ConnectFailed(e.to_string());
         }
 
@@ -215,7 +215,7 @@ impl WsTask {
         // --- re-announce running games (server dedups open sessions) ---------
         for slug in self.scanner.running_for(&self.server_id) {
             let msg = envelope("game_started", json!({ "game_slug": slug }));
-            if stream.send(Message::Text(msg)).await.is_err() {
+            if stream.send(Message::Text(msg.into())).await.is_err() {
                 return ServeEnd::Dropped("send failed".into());
             }
         }
@@ -243,7 +243,7 @@ impl WsTask {
                 }
                 _ = heartbeat.tick() => {
                     let msg = envelope("heartbeat", json!({}));
-                    if stream.send(Message::Text(msg)).await.is_err() {
+                    if stream.send(Message::Text(msg.into())).await.is_err() {
                         return ServeEnd::Dropped("heartbeat send failed".into());
                     }
                 }
@@ -288,7 +288,7 @@ impl WsTask {
                 json!({ "game_slug": ev.game_slug, "started_at": ev.ts }),
             );
             stream
-                .send(Message::Text(msg))
+                .send(Message::Text(msg.into()))
                 .await
                 .map_err(|e| e.to_string())?;
             self.db.delete_event(ev.id);

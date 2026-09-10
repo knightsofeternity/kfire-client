@@ -63,7 +63,7 @@ impl Observer {
             },
         });
         stream
-            .send(Message::Text(hello.to_string()))
+            .send(Message::Text(hello.to_string().into()))
             .await
             .expect("send hello");
         let ack = tokio::time::timeout(Duration::from_secs(5), stream.next())
