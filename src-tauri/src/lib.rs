@@ -770,6 +770,15 @@ pub fn run() {
                         );
                         queue_notify.notify_one();
                     }
+                    // Hearthstone reports its matches by log reading, which
+                    // only makes sense while the game is running.
+                    if ev.game_slug == "hearthstone" {
+                        if ev.started {
+                            crate::hs::start_watching(queue_db.clone(), queue_notify.clone());
+                        } else {
+                            crate::hs::stop_watching();
+                        }
+                    }
                     let _ = running_handle.emit("kfire://detection", event_type);
                     rebuild_tray(&running_handle);
                 }
