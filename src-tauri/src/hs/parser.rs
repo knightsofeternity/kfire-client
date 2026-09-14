@@ -372,3 +372,42 @@ D 17:44:59.4684646 GameState.DebugPrintPower() - TAG_CHANGE Entity=TestPlayer#12
         }
     }
 }
+
+#[cfg(test)]
+mod real_log {
+    use super::*;
+
+    /// Checks the parser against a real Power.log, kept OUTSIDE this public
+    /// repository: it carries the member's BattleTag, the opponents' names and
+    /// every card played. Ignored by default, driven by an environment
+    /// variable, so the suite stays runnable by anyone.
+    #[test]
+    #[ignore = "reads a real log outside the repository"]
+    fn real_log_yields_the_three_known_matches() {
+        let path = std::env::var("HS_REAL_LOG").expect("set HS_REAL_LOG");
+        let src = std::fs::read_to_string(path).unwrap();
+        let games = parse_games(src.lines());
+        assert_eq!(games.len(), 3, "wrong match count");
+        assert_eq!(
+            games.iter().map(|g| g.placement).collect::<Vec<_>>(),
+            vec![Some(5), Some(4), Some(5)]
+        );
+        assert_eq!(
+            games.iter().map(|g| g.turns).collect::<Vec<_>>(),
+            vec![Some(22), Some(26), Some(24)]
+        );
+        assert_eq!(
+            games
+                .iter()
+                .map(|g| g.hero_card_id.as_deref())
+                .collect::<Vec<_>>(),
+            vec![
+                Some("BG28_HERO_400"),
+                Some("BG20_HERO_101_SKIN_G"),
+                Some("TB_BaconShop_HERO_45_SKIN_F")
+            ]
+        );
+        assert!(games.iter().all(|g| g.result == "loss"));
+        assert!(games.iter().all(|g| g.mode == "battlegrounds"));
+    }
+}
