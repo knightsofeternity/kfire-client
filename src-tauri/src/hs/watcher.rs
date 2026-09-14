@@ -72,6 +72,9 @@ pub fn follow<F: FnMut(parser::Match, chrono::NaiveDateTime)>(
 
     let mut current: Option<PathBuf> = None;
     let mut cursor = Cursor::default();
+    // Kept across polls: a match opens in one chunk and ends many chunks
+    // later, so a parser restarted on every poll would never see one whole.
+    let mut parser = parser::Parser::new();
 
     while !stop.load(Ordering::Relaxed) {
         if let Some((path, start)) = newest_log(install) {
@@ -79,11 +82,12 @@ pub fn follow<F: FnMut(parser::Match, chrono::NaiveDateTime)>(
                 log::info!("hs: following {}", path.display());
                 current = Some(path.clone());
                 cursor.reset();
+                parser = parser::Parser::new();
             }
             if let Ok(contents) = std::fs::read_to_string(&path) {
                 let fresh = cursor.take_new(&contents);
                 if !fresh.is_empty() {
-                    for m in parser::parse_games(fresh.lines()) {
+                    for m in parser.push(fresh.lines()) {
                         emit(m, start);
                     }
                 }
@@ -177,5 +181,46 @@ mod tests {
         );
 
         std::fs::remove_dir_all(&install).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod real_log {
+    use super::*;
+
+    /// Replays a real log the way the watcher reads it, in growing chunks,
+    /// and checks it finds the same matches as a single read.
+    ///
+    /// This exercises the one assumption the design makes: a match whose start
+    /// and end fall in two different chunks would be missed. Ignored by
+    /// default, and the log stays outside this public repository because it
+    /// carries a BattleTag, opponents' names and every card played.
+    #[test]
+    #[ignore = "reads a real log outside the repository"]
+    fn a_chunked_replay_finds_the_same_matches() {
+        let path = std::env::var("HS_REAL_LOG").expect("set HS_REAL_LOG");
+        let whole = std::fs::read_to_string(path).unwrap();
+        let expected = parser::parse_games(whole.lines()).len();
+        assert!(expected > 0, "the sample should hold matches");
+
+        // Several chunk sizes, because the interesting failure depends on
+        // where the boundary lands relative to a game.
+        for chunks in [3usize, 17, 250] {
+            let step = whole.len() / chunks;
+            let mut cursor = Cursor::default();
+            let mut parser = parser::Parser::new();
+            let mut found = 0;
+            let mut upto = 0;
+            while upto < whole.len() {
+                upto = (upto + step).min(whole.len());
+                // Grow on a character boundary, as a real file always would.
+                while !whole.is_char_boundary(upto) {
+                    upto += 1;
+                }
+                let fresh = cursor.take_new(&whole[..upto]);
+                found += parser.push(fresh.lines()).len();
+            }
+            assert_eq!(found, expected, "chunked read lost matches at {chunks} chunks");
+        }
     }
 }

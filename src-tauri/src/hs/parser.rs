@@ -51,36 +51,67 @@ struct Game {
     ended_at: Option<NaiveTime>,
     /// Entity id -> card id.
     cards: HashMap<String, String>,
+    /// Set once this game has been reported, so later lines cannot report it
+    /// a second time.
+    emitted: bool,
 }
 
-/// Every finished match in the given lines.
+/// Reads lines as they arrive, emitting each match the moment it ends.
 ///
-/// Unfinished games are dropped: a member who closed the game mid-match has no
-/// result, and inventing one would be worse than reporting nothing.
-pub fn parse_games<'a, I: Iterator<Item = &'a str>>(lines: I) -> Vec<Match> {
-    let mut out = Vec::new();
-    let mut cur: Option<Game> = None;
+/// STATEFUL ON PURPOSE. The watcher hands over whatever the game appended since
+/// the last poll, a few seconds' worth, while a match lasts many minutes. Its
+/// opening and its result therefore land in DIFFERENT chunks, so a parser that
+/// only looked at one chunk at a time would never see a single complete match.
+/// Verified on a real log: chunked reading lost matches until this state was
+/// carried across calls.
+#[derive(Default)]
+pub struct Parser {
+    cur: Option<Game>,
+}
 
-    for line in lines {
-        // The game emits every event TWICE, under GameState and PowerTaskList.
-        // Keeping both would count every match twice.
-        if !line.contains("GameState.") {
-            continue;
-        }
-        if line.contains("CREATE_GAME") {
-            if let Some(g) = cur.take() {
-                out.extend(g.finish());
+impl Parser {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// The matches that finished within these lines.
+    ///
+    /// A match is emitted as soon as its result appears, not when the next one
+    /// starts: the last match of a session must not wait for a session that
+    /// may never come.
+    ///
+    /// Unfinished games are dropped: a member who closed the game mid-match has
+    /// no result, and inventing one would be worse than reporting nothing.
+    pub fn push<'a, I: Iterator<Item = &'a str>>(&mut self, lines: I) -> Vec<Match> {
+        let mut out = Vec::new();
+        for line in lines {
+            // The game emits every event TWICE, under GameState and
+            // PowerTaskList. Keeping both would count every match twice.
+            if !line.contains("GameState.") {
+                continue;
             }
-            cur = Some(Game::default());
-            continue;
+            if line.contains("CREATE_GAME") {
+                self.cur = Some(Game::default());
+                continue;
+            }
+            let Some(g) = self.cur.as_mut() else { continue };
+            g.read(line);
+            if !g.emitted {
+                if let Some(m) = g.finish() {
+                    g.emitted = true;
+                    out.push(m);
+                }
+            }
         }
-        let Some(g) = cur.as_mut() else { continue };
-        g.read(line);
+        out
     }
-    if let Some(g) = cur.take() {
-        out.extend(g.finish());
-    }
-    out
+}
+
+/// Every finished match in the given lines, read in one go.
+///
+/// A convenience over `Parser` for callers holding a whole file.
+pub fn parse_games<'a, I: Iterator<Item = &'a str>>(lines: I) -> Vec<Match> {
+    Parser::new().push(lines)
 }
 
 impl Game {
@@ -169,15 +200,16 @@ impl Game {
         }
     }
 
-    fn finish(self) -> Option<Match> {
+    /// The match, once every mandatory field has been read.
+    fn finish(&self) -> Option<Match> {
         let hero = self
             .hero_entity
             .as_ref()
             .and_then(|id| self.cards.get(id))
             .cloned();
         Some(Match {
-            mode: self.mode?,
-            result: self.result?,
+            mode: self.mode.clone()?,
+            result: self.result.clone()?,
             turns: self.turns,
             placement: self.placement,
             hero_card_id: hero,
