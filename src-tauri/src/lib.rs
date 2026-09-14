@@ -1,5 +1,6 @@
 pub mod api;
 pub mod db;
+pub mod hs;
 pub mod scanner;
 pub mod status;
 pub mod update;
@@ -417,6 +418,66 @@ fn ignore_game(state: tauri::State<'_, AppState>, slug: String, ignored: bool) {
     }
 }
 
+/// What the member is asked to agree to, and the current state.
+#[derive(serde::Serialize)]
+pub struct HsStatus {
+    /// False on Linux, where Hearthstone has no native client.
+    supported: bool,
+    enabled: bool,
+    /// The exact file the client would write, shown before writing it.
+    config_path: String,
+    /// Its exact contents, shown before writing them.
+    config_block: String,
+    /// The install directory, when found.
+    install_dir: Option<String>,
+}
+
+#[tauri::command]
+fn hs_status(state: tauri::State<'_, AppState>) -> HsStatus {
+    let path = crate::hs::config::log_config_path();
+    HsStatus {
+        supported: path.is_some(),
+        enabled: state.db.get_setting("hs_enabled").as_deref() == Some("1"),
+        config_path: path
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_default(),
+        config_block: crate::hs::config::POWER_BLOCK.trim_start().to_string(),
+        install_dir: crate::hs::installed_dir(&state.db).map(|p| p.to_string_lossy().to_string()),
+    }
+}
+
+/// Writes or removes the game's log configuration, then remembers the choice.
+///
+/// An existing [Power] section, most likely another tracker's, is left alone by
+/// with_power_block, so enabling is a no-op for a member who already logs.
+#[tauri::command]
+fn hs_set_enabled(state: tauri::State<'_, AppState>, enabled: bool) -> Result<(), String> {
+    let path = crate::hs::config::log_config_path().ok_or("unsupported platform")?;
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+    let current = std::fs::read_to_string(&path).unwrap_or_default();
+    let next = if enabled {
+        crate::hs::config::with_power_block(&current)
+    } else {
+        crate::hs::config::without_power_block(&current)
+    };
+    std::fs::write(&path, next).map_err(|e| e.to_string())?;
+    state
+        .db
+        .set_setting("hs_enabled", if enabled { "1" } else { "0" });
+    if !enabled {
+        crate::hs::stop_watching();
+    }
+    Ok(())
+}
+
+/// Lets the member point at their install when detection failed.
+#[tauri::command]
+fn hs_set_install_dir(state: tauri::State<'_, AppState>, dir: String) {
+    state.db.set_setting("hs_install_dir", &dir);
+}
+
 /// Sets the global status and re-applies it to every server that inherits it.
 #[tauri::command]
 fn set_global_status(
@@ -692,6 +753,9 @@ pub fn run() {
             set_autostart,
             stop_game,
             ignore_game,
+            hs_status,
+            hs_set_enabled,
+            hs_set_install_dir,
             update::check_for_update
         ])
         .setup(|app| {
@@ -760,8 +824,23 @@ pub fn run() {
                         .map(|s| s.status_override)
                         .unwrap_or_default();
                     if crate::status::effective_status(&global, &over) != "offline" {
-                        queue_db.queue_event(&ev.server_id, event_type, &ev.game_slug, &ev.ts.to_rfc3339());
+                        queue_db.queue_event(
+                            &ev.server_id,
+                            event_type,
+                            &ev.game_slug,
+                            &ev.ts.to_rfc3339(),
+                            None,
+                        );
                         queue_notify.notify_one();
+                    }
+                    // Hearthstone reports its matches by log reading, which
+                    // only makes sense while the game is running.
+                    if ev.game_slug == "hearthstone" {
+                        if ev.started {
+                            crate::hs::start_watching(queue_db.clone(), queue_notify.clone());
+                        } else {
+                            crate::hs::stop_watching();
+                        }
                     }
                     let _ = running_handle.emit("kfire://detection", event_type);
                     rebuild_tray(&running_handle);

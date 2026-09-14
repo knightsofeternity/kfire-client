@@ -34,6 +34,39 @@
   let adding = $state(false);
   let pairing = $state<LinkInfo | null>(null);
 
+  type HsStatus = {
+    supported: boolean;
+    enabled: boolean;
+    config_path: string;
+    config_block: string;
+    install_dir: string | null;
+  };
+
+  let hs = $state<HsStatus | null>(null);
+  let hsBusy = $state(false);
+  let hsError = $state("");
+
+  async function loadHs() {
+    try {
+      hs = await invoke<HsStatus>("hs_status");
+    } catch {
+      hs = null;
+    }
+  }
+
+  async function toggleHs(next: boolean) {
+    hsBusy = true;
+    hsError = "";
+    try {
+      await invoke("hs_set_enabled", { enabled: next });
+      await loadHs();
+    } catch (e) {
+      hsError = String(e);
+    } finally {
+      hsBusy = false;
+    }
+  }
+
   type UpdateInfo = {
     current: string;
     latest: string | null;
@@ -105,6 +138,7 @@
   onMount(() => {
     refreshState();
     checkForUpdate();
+    loadHs();
     const interval = setInterval(refreshState, 4000);
     const unsubs = [
       listen<StatusEvent>("kfire://status", (e) => {
@@ -295,6 +329,46 @@
         <input type="checkbox" checked={autostart} onchange={toggleAutostart} />
         <span>Launch KFIRE at startup</span>
       </label>
+
+      {#if hs?.supported}
+        <h2>Suivi des parties Hearthstone</h2>
+
+        {#if hs.enabled}
+          <p class="muted">
+            Le suivi est actif. KFIRE lit le journal du jeu et n'envoie que le mode, le
+            résultat, le nombre de tours, votre position et votre héros. Le pseudo de votre
+            adversaire et les cartes jouées ne quittent jamais cet ordinateur.
+          </p>
+          <button class="secondary" disabled={hsBusy} onclick={() => toggleHs(false)}>
+            Désactiver et retirer le fichier
+          </button>
+        {:else}
+          <p class="muted">
+            Hearthstone n'écrit ses journaux détaillés que si ce fichier existe. KFIRE va
+            l'écrire ici :
+          </p>
+          <pre class="hs-pre">{hs.config_path}</pre>
+          <p class="muted">avec exactement ce contenu :</p>
+          <pre class="hs-pre">{hs.config_block}</pre>
+          <p class="muted">
+            Seuls le mode, le résultat, le nombre de tours, votre position et votre héros
+            sont envoyés. Le pseudo de votre adversaire et les cartes jouées ne quittent
+            jamais cet ordinateur.
+          </p>
+          <button disabled={hsBusy} onclick={() => toggleHs(true)}>Activer le suivi</button>
+        {/if}
+
+        {#if hsError}
+          <p class="error" role="alert">{hsError}</p>
+        {/if}
+
+        {#if !hs.install_dir}
+          <p class="muted small">
+            Dossier d'installation introuvable. Lancez Hearthstone une fois, puis rouvrez cet
+            écran.
+          </p>
+        {/if}
+      {/if}
     </section>
   {/if}
 
@@ -374,4 +448,5 @@
   .version-link { margin: 0; padding: 0; font-size: 0.75rem; font-weight: 600; color: #f97316; background: transparent; border: none; cursor: pointer; }
   .version-link:hover { color: #fb923c; background: transparent; text-decoration: underline; }
   .up-to-date { color: #22c55e; }
+  .hs-pre { margin: 0; padding: 0.6em 0.8em; background: #151a23; border: 1px solid #2a3140; border-radius: 8px; color: #e5e7eb; font-size: 0.8rem; overflow-x: auto; white-space: pre; }
 </style>

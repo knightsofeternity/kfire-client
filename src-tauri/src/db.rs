@@ -41,6 +41,7 @@ pub struct PendingEvent {
     pub event_type: String, // "game_started" | "game_stopped"
     pub game_slug: String,
     pub ts: String, // RFC 3339
+    pub payload: Option<String>,
 }
 
 impl Db {
@@ -128,6 +129,17 @@ impl Db {
             conn.execute(
                 "DELETE FROM settings WHERE key IN ('server_url', 'refresh_token', 'games_synced_at')",
                 [],
+            )?;
+        }
+
+        // v2 -> v3: a queued event can now carry its own JSON payload. Session
+        // events leave it NULL and keep the payload ws.rs has always built for
+        // them; a match result stores the whole object it must send.
+        let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+        if version < 3 {
+            conn.execute_batch(
+                "ALTER TABLE pending_events ADD COLUMN payload TEXT;
+                 PRAGMA user_version = 3;",
             )?;
         }
 
@@ -339,18 +351,26 @@ impl Db {
 
     // --- offline event queue (per server) ----------------------------------
 
-    pub fn queue_event(&self, server_id: &str, event_type: &str, game_slug: &str, ts: &str) {
+    pub fn queue_event(
+        &self,
+        server_id: &str,
+        event_type: &str,
+        game_slug: &str,
+        ts: &str,
+        payload: Option<&str>,
+    ) {
         let conn = self.conn.lock().unwrap();
         let _ = conn.execute(
-            "INSERT INTO pending_events (server_id, type, game_slug, ts) VALUES (?1, ?2, ?3, ?4)",
-            params![server_id, event_type, game_slug, ts],
+            "INSERT INTO pending_events (server_id, type, game_slug, ts, payload)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![server_id, event_type, game_slug, ts, payload],
         );
     }
 
     pub fn pending_events(&self, server_id: &str) -> Vec<PendingEvent> {
         let conn = self.conn.lock().unwrap();
         let Ok(mut stmt) = conn.prepare(
-            "SELECT id, type, game_slug, ts FROM pending_events
+            "SELECT id, type, game_slug, ts, payload FROM pending_events
              WHERE server_id = ?1 ORDER BY id",
         ) else {
             return Vec::new();
@@ -361,6 +381,7 @@ impl Db {
                 event_type: r.get(1)?,
                 game_slug: r.get(2)?,
                 ts: r.get(3)?,
+                payload: r.get(4)?,
             })
         });
         match rows {
@@ -429,8 +450,8 @@ mod tests {
         db.replace_games(&b, &[game("game-b", "b.exe")]).unwrap();
         assert_eq!(db.load_games().len(), 2);
 
-        db.queue_event(&a, "game_started", "game-a", "t1");
-        db.queue_event(&b, "game_started", "game-b", "t2");
+        db.queue_event(&a, "game_started", "game-a", "t1", None);
+        db.queue_event(&b, "game_started", "game-b", "t2", None);
         assert_eq!(db.pending_events(&a).len(), 1);
         assert_eq!(db.pending_events(&b).len(), 1);
         assert_eq!(db.pending_events(&a)[0].game_slug, "game-a");
@@ -441,11 +462,33 @@ mod tests {
         let db = mem();
         let a = db.add_server("https://a.example", "ra", "A");
         db.replace_games(&a, &[game("game-a", "a.exe")]).unwrap();
-        db.queue_event(&a, "game_started", "game-a", "t1");
+        db.queue_event(&a, "game_started", "game-a", "t1", None);
 
         db.remove_server(&a);
         assert!(db.get_server(&a).is_none());
         assert_eq!(db.load_games().len(), 0);
         assert_eq!(db.pending_events(&a).len(), 0);
+    }
+
+    #[test]
+    fn queue_keeps_payload_and_existing_events_stay_payloadless() {
+        let db = mem();
+        let a = db.add_server("https://a", "r", "A");
+        db.queue_event(&a, "game_started", "game-a", "t1", None);
+        db.queue_event(
+            &a,
+            "match_result",
+            "hearthstone",
+            "t2",
+            Some(r#"{"mode":"battlegrounds"}"#),
+        );
+
+        let events = db.pending_events(&a);
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].payload, None);
+        assert_eq!(
+            events[1].payload.as_deref(),
+            Some(r#"{"mode":"battlegrounds"}"#)
+        );
     }
 }
