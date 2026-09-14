@@ -25,7 +25,7 @@ use tokio::sync::{mpsc::UnboundedSender, watch, Notify};
 use tokio_tungstenite::tungstenite::Message;
 
 use crate::api::{ApiClient, ApiError};
-use crate::db::Db;
+use crate::db::{Db, PendingEvent};
 use crate::scanner::ScannerState;
 
 const PROTOCOL_VERSION: u64 = 1;
@@ -283,12 +283,8 @@ impl WsTask {
     /// Sends every queued event for this server in order, deleting each once sent.
     async fn drain_queue(&self, stream: &mut WsStream) -> Result<(), String> {
         for ev in self.db.pending_events(&self.server_id) {
-            let msg = envelope(
-                &ev.event_type,
-                json!({ "game_slug": ev.game_slug, "started_at": ev.ts }),
-            );
             stream
-                .send(Message::Text(msg.into()))
+                .send(Message::Text(queued_message(&ev).into()))
                 .await
                 .map_err(|e| e.to_string())?;
             self.db.delete_event(ev.id);
@@ -360,6 +356,29 @@ fn envelope(typ: &str, payload: serde_json::Value) -> String {
     .to_string()
 }
 
+/// Builds the message for one queued event.
+///
+/// An event that stored its own payload sends it verbatim. One that did not is
+/// a session event, and keeps the exact payload this function has always built
+/// for it: changing that shape would break starts and stops in production.
+fn queued_message(ev: &PendingEvent) -> String {
+    match ev.payload.as_deref() {
+        Some(raw) => match serde_json::from_str::<serde_json::Value>(raw) {
+            Ok(v) => envelope(&ev.event_type, v),
+            // A payload we wrote ourselves and can no longer parse means a
+            // corrupted row. Dropping it beats sending nonsense.
+            Err(e) => {
+                log::warn!("ws: unparsable queued payload for event {}: {e}", ev.id);
+                envelope(&ev.event_type, json!({}))
+            }
+        },
+        None => envelope(
+            &ev.event_type,
+            json!({ "game_slug": ev.game_slug, "started_at": ev.ts }),
+        ),
+    }
+}
+
 /// Builds the user-facing "disconnected" detail from the reason the connection
 /// ended. An empty reason (e.g. a clean shutdown path) yields a bare
 /// "reconnecting…"; otherwise the real cause is shown so a stuck client is
@@ -375,6 +394,7 @@ fn reconnect_detail(reason: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::reconnect_detail;
+    use super::*;
 
     #[test]
     fn reconnect_detail_includes_reason() {
@@ -387,5 +407,37 @@ mod tests {
     #[test]
     fn reconnect_detail_empty_reason_is_bare() {
         assert_eq!(reconnect_detail(""), "reconnecting…");
+    }
+
+    #[test]
+    fn session_events_keep_their_historical_payload() {
+        let ev = PendingEvent {
+            id: 1,
+            event_type: "game_started".into(),
+            game_slug: "subnautica".into(),
+            ts: "2026-09-14T10:00:00Z".into(),
+            payload: None,
+        };
+        let msg = queued_message(&ev);
+        let v: serde_json::Value = serde_json::from_str(&msg).unwrap();
+        assert_eq!(v["type"], "game_started");
+        assert_eq!(v["payload"]["game_slug"], "subnautica");
+        assert_eq!(v["payload"]["started_at"], "2026-09-14T10:00:00Z");
+    }
+
+    #[test]
+    fn stored_payload_is_sent_verbatim() {
+        let ev = PendingEvent {
+            id: 2,
+            event_type: "match_result".into(),
+            game_slug: "hearthstone".into(),
+            ts: "2026-09-14T10:00:00Z".into(),
+            payload: Some(r#"{"game_slug":"hearthstone","mode":"battlegrounds"}"#.into()),
+        };
+        let msg = queued_message(&ev);
+        let v: serde_json::Value = serde_json::from_str(&msg).unwrap();
+        assert_eq!(v["type"], "match_result");
+        assert_eq!(v["payload"]["mode"], "battlegrounds");
+        assert!(v["payload"].get("started_at").is_none());
     }
 }

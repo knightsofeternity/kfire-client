@@ -760,7 +760,13 @@ pub fn run() {
                         .map(|s| s.status_override)
                         .unwrap_or_default();
                     if crate::status::effective_status(&global, &over) != "offline" {
-                        queue_db.queue_event(&ev.server_id, event_type, &ev.game_slug, &ev.ts.to_rfc3339());
+                        queue_db.queue_event(
+                            &ev.server_id,
+                            event_type,
+                            &ev.game_slug,
+                            &ev.ts.to_rfc3339(),
+                            None,
+                        );
                         queue_notify.notify_one();
                     }
                     let _ = running_handle.emit("kfire://detection", event_type);

@@ -194,6 +194,7 @@ async fn full_presence_pipeline() {
         "game_started",
         "counter-strike-2",
         &chrono::Utc::now().to_rfc3339(),
+        None,
     );
     queue_notify.notify_one();
 
@@ -205,6 +206,7 @@ async fn full_presence_pipeline() {
         "game_stopped",
         "counter-strike-2",
         &chrono::Utc::now().to_rfc3339(),
+        None,
     );
     queue_notify.notify_one();
     observer.wait_presence("alice", "online").await;
