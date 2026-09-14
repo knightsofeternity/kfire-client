@@ -5,4 +5,5 @@
 //! card played. Both are in the log. The summary carries facts about the member
 //! only.
 
+pub mod config;
 pub mod paths;
