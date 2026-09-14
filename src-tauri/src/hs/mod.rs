@@ -10,6 +10,26 @@ pub mod parser;
 pub mod paths;
 pub mod watcher;
 
+/// The instant a local wall-clock time really happened.
+///
+/// The game's log writes LOCAL time and no zone. Sending it as if it were UTC
+/// would place a French member's match two hours in the FUTURE, and the server
+/// refuses anything more than five minutes ahead: every match would have been
+/// silently rejected.
+///
+/// Around a daylight-saving change a local time can be ambiguous, happening
+/// twice, or skipped entirely. The earliest reading is taken, and a skipped
+/// time falls back to reading it as UTC, because a match is worth recording an
+/// hour off rather than not at all.
+pub fn to_utc(local: chrono::NaiveDateTime) -> chrono::DateTime<chrono::Utc> {
+    use chrono::TimeZone;
+    chrono::Local
+        .from_local_datetime(&local)
+        .earliest()
+        .map(|t| t.with_timezone(&chrono::Utc))
+        .unwrap_or_else(|| local.and_utc())
+}
+
 /// The payload sent for one match, and nothing else.
 ///
 /// Built in one place so a test can pin down exactly which fields leave this
@@ -24,7 +44,7 @@ pub fn payload(
     o.insert("game_slug".into(), slug.into());
     o.insert("mode".into(), m.mode.clone().into());
     o.insert("result".into(), m.result.clone().into());
-    o.insert("played_at".into(), played_at.and_utc().to_rfc3339().into());
+    o.insert("played_at".into(), to_utc(played_at).to_rfc3339().into());
     if let Some(t) = m.turns {
         o.insert("turns".into(), t.into());
     }
@@ -79,7 +99,7 @@ pub fn start_watching(db: Arc<crate::db::Db>, notify: Arc<tokio::sync::Notify>) 
                     id,
                     "match_result",
                     "hearthstone",
-                    &played_at.and_utc().to_rfc3339(),
+                    &to_utc(played_at).to_rfc3339(),
                     Some(&p.to_string()),
                 );
             }
@@ -230,7 +250,51 @@ mod tests {
     fn played_at_is_sent_as_utc_rfc3339() {
         let v = payload(&a_match(), "hearthstone", at());
         let s = v["played_at"].as_str().unwrap();
-        assert!(s.starts_with("2026-08-02T17:44:59"));
-        assert!(s.ends_with("+00:00") || s.ends_with('Z'));
+        let parsed = chrono::DateTime::parse_from_rfc3339(s).expect("RFC 3339");
+        assert_eq!(parsed.offset().local_minus_utc(), 0, "must be sent as UTC");
+        assert_eq!(parsed.naive_utc(), to_utc(at()).naive_utc());
+    }
+
+    #[test]
+    fn a_local_time_is_not_mistaken_for_utc() {
+        // The log writes local time. Sending it unchanged would put a French
+        // member's match two hours in the future, and the server refuses
+        // anything more than five minutes ahead.
+        use chrono::TimeZone;
+        let local = at();
+        let expected = chrono::Local
+            .from_local_datetime(&local)
+            .earliest()
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        assert_eq!(to_utc(local), expected);
+    }
+
+    #[test]
+    fn a_match_is_never_sent_in_the_future() {
+        // The server refuses a time more than five minutes ahead of its own
+        // clock, so a match that just ended must land in the past.
+        let just_now = chrono::Local::now().naive_local() - chrono::Duration::seconds(30);
+        let sent = to_utc(just_now);
+        assert!(sent <= chrono::Utc::now(), "sent {sent} is in the future");
+    }
+}
+
+#[cfg(test)]
+mod real_log_payloads {
+    use super::*;
+
+    /// Prints the exact payloads the client would queue for a real log, so the
+    /// contract with the server can be checked against a running instance.
+    /// Ignored by default; the log stays outside this public repository.
+    #[test]
+    #[ignore = "reads a real log outside the repository"]
+    fn payloads_for_a_real_log() {
+        let path = std::env::var("HS_REAL_LOG").expect("set HS_REAL_LOG");
+        let src = std::fs::read_to_string(path).unwrap();
+        let start = paths::session_start("Hearthstone_2026_08_02_17_22_29").unwrap();
+        for m in parser::parse_games(src.lines()) {
+            println!("{}", payload(&m, "hearthstone", m.played_at(start)));
+        }
     }
 }
