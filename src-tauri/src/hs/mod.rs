@@ -61,23 +61,61 @@ pub fn start_watching(db: Arc<crate::db::Db>, notify: Arc<tokio::sync::Notify>) 
     std::thread::spawn(move || {
         watcher::follow(&install, &STOP, |m, start| {
             let played_at = m.played_at(start);
-            // Every linked server that knows the game gets the match, exactly
-            // as a session start does.
-            for server in db.list_servers() {
+            let servers: Vec<(String, String)> = db
+                .list_servers()
+                .into_iter()
+                .map(|s| (s.id, s.status_override))
+                .collect();
+            let catalog: Vec<(String, String)> = db
+                .load_games()
+                .into_iter()
+                .map(|(id, g)| (id, g.slug))
+                .collect();
+            let global = db.get_setting("global_status").unwrap_or_default();
+            let targets = targets(&servers, &catalog, &global, "hearthstone");
+            for id in &targets {
                 let p = payload(&m, "hearthstone", played_at);
                 db.queue_event(
-                    &server.id,
+                    id,
                     "match_result",
                     "hearthstone",
                     &played_at.and_utc().to_rfc3339(),
                     Some(&p.to_string()),
                 );
             }
+            if targets.is_empty() {
+                log::info!("hs: a {} went unreported, no eligible server", m.result);
+                return;
+            }
             notify.notify_one();
             log::info!("hs: queued a {} in {}", m.result, m.mode);
         });
         STOP.store(true, Ordering::SeqCst);
     });
+}
+
+/// The servers a match should be queued for.
+///
+/// Two filters, both matching how a session start is fanned out. A server whose
+/// catalogue does not carry the game would answer `unknown_game`, so it is
+/// skipped. A server the member has set offline has no session to drain its
+/// queue, so enqueuing would pile rows up until they flooded back; and choosing
+/// offline is a choice not to be tracked, which applies to a match as much as
+/// to a session.
+fn targets(
+    servers: &[(String, String)],
+    catalog: &[(String, String)],
+    global: &str,
+    slug: &str,
+) -> Vec<String> {
+    servers
+        .iter()
+        .filter(|(id, over)| {
+            crate::status::effective_status(global, over) != "offline"
+                && catalog.iter().any(|(sid, s)| sid == id && s == slug)
+        })
+        .map(|(id, _)| id.clone())
+        .collect()
 }
 
 /// Asks the watcher thread to finish.
@@ -157,6 +195,35 @@ mod tests {
         assert!(v.get("placement").is_none());
         assert!(v.get("turns").is_none());
         assert!(v.get("hero_card_id").is_none());
+    }
+
+    #[test]
+    fn a_server_that_does_not_know_the_game_is_skipped() {
+        let servers = vec![("a".to_string(), "inherit".to_string()), ("b".into(), "inherit".into())];
+        let catalog = vec![("a".to_string(), "hearthstone".to_string()), ("b".into(), "subnautica".into())];
+        assert_eq!(targets(&servers, &catalog, "online", "hearthstone"), vec!["a"]);
+    }
+
+    #[test]
+    fn an_offline_server_is_skipped() {
+        // Nothing drains its queue, and offline is a choice not to be tracked.
+        let servers = vec![("a".to_string(), "offline".to_string())];
+        let catalog = vec![("a".to_string(), "hearthstone".to_string())];
+        assert!(targets(&servers, &catalog, "online", "hearthstone").is_empty());
+    }
+
+    #[test]
+    fn a_global_offline_status_skips_every_server() {
+        let servers = vec![("a".to_string(), "inherit".to_string())];
+        let catalog = vec![("a".to_string(), "hearthstone".to_string())];
+        assert!(targets(&servers, &catalog, "offline", "hearthstone").is_empty());
+    }
+
+    #[test]
+    fn a_server_overriding_back_to_online_is_kept() {
+        let servers = vec![("a".to_string(), "online".to_string())];
+        let catalog = vec![("a".to_string(), "hearthstone".to_string())];
+        assert_eq!(targets(&servers, &catalog, "offline", "hearthstone"), vec!["a"]);
     }
 
     #[test]
