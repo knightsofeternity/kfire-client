@@ -8,3 +8,4 @@
 pub mod config;
 pub mod parser;
 pub mod paths;
+pub mod watcher;
