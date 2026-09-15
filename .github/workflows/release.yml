@@ -61,6 +61,20 @@ jobs:
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile
 
+      # The notes come from CHANGELOG.md, not from this file. They used to be
+      # written here, so 0.5.0 shipped under 0.4.0's notes: a hardcoded body is
+      # never updated by the pull request that earns it. A missing section
+      # fails the build, before anything is published.
+      - name: Read the release notes
+        id: notes
+        shell: bash
+        run: |
+          {
+            echo 'body<<KFIRE_EOF'
+            python3 scripts/release-notes.py "${{ github.ref_name }}" CHANGELOG.md
+            echo 'KFIRE_EOF'
+          } >> "$GITHUB_OUTPUT"
+
       - name: Build and release
         uses: tauri-apps/tauri-action@v1
         env:
@@ -71,23 +85,7 @@ jobs:
           releaseBody: |
             KFIRE desktop client. Download the installer for your platform below.
 
-            **New in this version:** KFIRE detects a lot more games. Titles whose
-            binary has a generic name (`game.exe`, `hl2.exe` and friends) used to be
-            invisible because that name could belong to any of hundreds of games;
-            KFIRE now recognizes them by their install folder as well. That covers
-            around 470 games, among them Counter-Strike: Source, Day of Defeat:
-            Source, Alien: Isolation, Football Manager, Total War: Warhammer and
-            DRAGON BALL GEKISHIN SQUADRA. Install paths are read and compared on
-            your machine only: KFIRE still reports nothing but the game itself.
-
-            **On first launch:** enter your organization's KFIRE server address, then
-            approve the device in the browser - no password needed.
-
-            **Security warning?** The installers aren't code-signed yet, so your OS may
-            warn about an "unknown publisher". The app is safe:
-            - Windows (SmartScreen): *More info* → *Run anyway*
-            - macOS (Gatekeeper): right-click the app → *Open* → *Open*
-            - Linux: no warning
+            ${{ steps.notes.outputs.body }}
           releaseDraft: false
           prerelease: false
           args: ${{ matrix.args }}
