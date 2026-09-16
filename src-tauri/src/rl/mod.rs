@@ -7,4 +7,5 @@
 //! client s'en sert pour calculer, puis n'émet que des faits sur le membre.
 
 pub mod config;
+pub mod frames;
 pub mod paths;
