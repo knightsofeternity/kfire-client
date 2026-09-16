@@ -85,6 +85,175 @@ fn targets(
         .collect()
 }
 
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+
+/// Vrai tant qu'aucun fil de suivi ne doit tourner. Un seul drapeau suffit : le
+/// jeu tourne au plus une fois, et le scanner ne signale jamais deux démarrages
+/// sans un arrêt entre les deux.
+static STOP: AtomicBool = AtomicBool::new(true);
+
+/// À quelle cadence au plus l'état du direct est publié.
+const LIVE_EVERY: std::time::Duration = std::time::Duration::from_millis(500);
+
+/// Le dossier d'installation : le réglage manuel du membre gagne, sinon le
+/// process en cours nous le dit, sinon un emplacement courant, et la réponse
+/// est retenue.
+pub fn installed_dir(db: &crate::db::Db) -> Option<std::path::PathBuf> {
+    if let Some(manual) = db.get_setting("rl_install_dir") {
+        return Some(std::path::PathBuf::from(manual));
+    }
+    let found = paths::running_install_dir().or_else(paths::common_install_dir)?;
+    db.set_setting("rl_install_dir", &found.to_string_lossy());
+    Some(found)
+}
+
+/// Demande au fil de suivi de s'arrêter.
+pub fn stop_watching() {
+    STOP.store(true, Ordering::SeqCst);
+}
+
+/// Commence à suivre la socket, sauf si le membre n'a pas activé le suivi ou
+/// n'a pas déclaré son pseudo.
+pub fn start_watching(
+    db: Arc<crate::db::Db>,
+    notify: Arc<tokio::sync::Notify>,
+    live: tokio::sync::watch::Sender<Option<String>>,
+) {
+    if db.get_setting("rl_enabled").as_deref() != Some("1") {
+        return;
+    }
+    let Some(member) = db
+        .get_setting("rl_player_name")
+        .filter(|n| !n.trim().is_empty())
+    else {
+        log::info!("rl: no player name set, not watching");
+        return;
+    };
+    let Some(install) = installed_dir(&db) else {
+        log::info!("rl: install directory not found, not watching");
+        return;
+    };
+    let port = std::fs::read_to_string(paths::config_path_in(&install.to_string_lossy()))
+        .map(|c| config::port_in(&c))
+        .unwrap_or(config::DEFAULT_PORT);
+
+    // swap rend la valeur PRÉCÉDENTE : true veut dire qu'on était arrêté, donc
+    // on démarre.
+    if !STOP.swap(false, Ordering::SeqCst) {
+        return;
+    }
+
+    std::thread::spawn(move || {
+        let mut current: Option<parser::Match> = None;
+        let mut started_at = std::time::Instant::now();
+        let mut last_live = std::time::Instant::now() - LIVE_EVERY;
+        let mut last_guid: Option<String> = None;
+
+        socket::follow(port, &STOP, |ev| match ev {
+            socket::Event::Open => {
+                if current.is_none() {
+                    current = Some(parser::Match::new(&member));
+                    started_at = std::time::Instant::now();
+                }
+            }
+            socket::Event::State(data) => {
+                let m = current.get_or_insert_with(|| {
+                    started_at = std::time::Instant::now();
+                    parser::Match::new(&member)
+                });
+                m.observe(&data);
+                if last_live.elapsed() >= LIVE_EVERY {
+                    last_live = std::time::Instant::now();
+                    if let Some(l) = m.live() {
+                        let env = serde_json::json!({
+                            "type": "live_match",
+                            "ts": chrono::Utc::now().to_rfc3339(),
+                            "payload": live_payload(&l, SLUG),
+                        });
+                        let _ = live.send(Some(env.to_string()));
+                    }
+                }
+            }
+            socket::Event::Close => {
+                let _ = live.send(None);
+                let Some(m) = current.take() else { return };
+
+                // Le même GUID deux fois veut dire que le jeu a renvoyé la fin
+                // d'un match déjà traité.
+                if m.guid().is_some() && m.guid() == last_guid {
+                    return;
+                }
+                last_guid = m.guid();
+
+                let seconds = started_at.elapsed().as_secs() as i64;
+                let names = m.names_seen();
+                let Some(summary) = m.finish(seconds) else {
+                    // Le contrat de complétude : mieux vaut un match manquant
+                    // qu'un match faux. Dire pourquoi, sinon personne ne saura.
+                    log::info!(
+                        "rl: a match went unreported, the summary was incomplete \
+                         (guid={:?}, {}s)",
+                        last_guid,
+                        seconds
+                    );
+                    // Le cas de loin le plus probable : le pseudo réglé ne
+                    // correspond à personne. On écrit les noms vus dans le
+                    // journal LOCAL, qui ne quitte pas cette machine, pour que
+                    // le membre se corrige tout seul. Sans cela il ne verrait
+                    // qu'un silence.
+                    if !names.is_empty() {
+                        log::info!(
+                            "rl: the configured player name matched nobody. \
+                             Names in that match: {}. Set yours in the settings.",
+                            names.join(", ")
+                        );
+                    }
+                    return;
+                };
+
+                let played_at = chrono::Utc::now();
+                let servers: Vec<(String, String)> = db
+                    .list_servers()
+                    .into_iter()
+                    .map(|s| (s.id, s.status_override))
+                    .collect();
+                let catalog: Vec<(String, String)> = db
+                    .load_games()
+                    .into_iter()
+                    .map(|(id, g)| (id, g.slug))
+                    .collect();
+                let global = db.get_setting("global_status").unwrap_or_default();
+                let ids = targets(&servers, &catalog, &global, SLUG);
+                if ids.is_empty() {
+                    log::info!(
+                        "rl: a {} went unreported, no eligible server",
+                        summary.result
+                    );
+                    return;
+                }
+                for id in &ids {
+                    let p = payload(&summary, SLUG, played_at);
+                    db.queue_event(
+                        id,
+                        "match_result",
+                        SLUG,
+                        &played_at.to_rfc3339(),
+                        Some(&p.to_string()),
+                    );
+                }
+                notify.notify_one();
+                log::info!(
+                    "rl: queued a {} on playlist {}",
+                    summary.result,
+                    summary.playlist
+                );
+            }
+        });
+        STOP.store(true, Ordering::SeqCst);
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
