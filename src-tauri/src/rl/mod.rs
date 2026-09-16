@@ -8,4 +8,5 @@
 
 pub mod config;
 pub mod frames;
+pub mod parser;
 pub mod paths;
