@@ -222,6 +222,14 @@ pub fn start_watching(
                     return;
                 };
 
+                // Le résumé a été produit, donc le pseudo réglé a bien trouvé
+                // son joueur : l'avertissement n'a plus lieu d'être. On l'efface
+                // ICI, avant toute question de destinataire. L'effacer plus bas
+                // le laisserait affiché quand aucun serveur n'est éligible, et
+                // le membre verrait l'écran continuer de l'accuser alors qu'il
+                // a fait exactement ce qu'on lui demandait.
+                db.set_setting("rl_last_mismatch", "");
+
                 let played_at = chrono::Utc::now();
                 let servers: Vec<(String, String)> = db
                     .list_servers()
@@ -253,8 +261,6 @@ pub fn start_watching(
                     );
                 }
                 notify.notify_one();
-                // Ça a marché : on efface l'avertissement précédent.
-                db.set_setting("rl_last_mismatch", "");
                 log::info!(
                     "rl: queued a {} on playlist {}",
                     summary.result,
