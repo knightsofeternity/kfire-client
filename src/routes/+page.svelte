@@ -167,6 +167,17 @@
     // Drop status entries for servers that no longer exist.
     const ids = new Set(servers.map((x) => x.id));
     for (const id of Object.keys(statuses)) if (!ids.has(id)) delete statuses[id];
+
+    // Le seul champ Rocket League qui change sans que le membre ait rien
+    // fait : on le sonde ici plutôt que de rappeler rl_status, qui peut
+    // énumérer les processus de la machine pour trouver l'installation.
+    if (rl) {
+      try {
+        rl.last_mismatch = await invoke<string>("rl_last_mismatch");
+      } catch {
+        // Le reste de l'écran RL reste inchangé si l'appel échoue.
+      }
+    }
   }
 
   function statusOf(id: string): { status: ServerStatus; detail: string } {

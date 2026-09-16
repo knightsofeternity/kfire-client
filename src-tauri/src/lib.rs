@@ -557,6 +557,18 @@ fn rl_set_player_name(state: tauri::State<'_, AppState>, name: String) {
     state.db.set_setting("rl_player_name", name.trim());
 }
 
+/// Les pseudos du dernier match qui n'a correspondu à personne, ou une chaîne
+/// vide.
+///
+/// Volontairement séparé de `rl_status` : c'est le seul champ qui change sans
+/// que le membre ait rien fait, donc le seul qu'il faille sonder. `rl_status`,
+/// lui, peut énumérer les processus de la machine pour trouver l'installation,
+/// ce qu'on ne fait pas toutes les quatre secondes.
+#[tauri::command]
+fn rl_last_mismatch(state: tauri::State<'_, AppState>) -> String {
+    state.db.get_setting("rl_last_mismatch").unwrap_or_default()
+}
+
 /// Sets the global status and re-applies it to every server that inherits it.
 #[tauri::command]
 fn set_global_status(
@@ -839,6 +851,7 @@ pub fn run() {
             rl_set_enabled,
             rl_set_install_dir,
             rl_set_player_name,
+            rl_last_mismatch,
             update::check_for_update
         ])
         .setup(|app| {
