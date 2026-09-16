@@ -38,6 +38,8 @@ pub struct AppState {
     notifications: mpsc::UnboundedSender<Notification>,
     /// Scanner events channel, reused to push synthetic stops from the UI.
     events: mpsc::UnboundedSender<crate::scanner::GameEvent>,
+    /// Le dernier état de match en direct, diffusé à toutes les connexions.
+    pub live: watch::Sender<Option<String>>,
 }
 
 impl AppState {
@@ -58,6 +60,7 @@ impl AppState {
             notifications: self.notifications.clone(),
             access_tokens: self.access_tokens.clone(),
             shutdown: stop_rx,
+            live: self.live.subscribe(),
         };
         tauri::async_runtime::spawn(task.run());
     }
@@ -808,6 +811,7 @@ pub fn run() {
                 sessions: Mutex::new(HashMap::new()),
                 notifications: notif_tx,
                 events: event_tx,
+                live: watch::channel(None).0,
             };
 
             // --- scanner events → SQLite queue → WS tasks ----------------------
