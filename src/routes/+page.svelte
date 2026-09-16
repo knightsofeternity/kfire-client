@@ -1,6 +1,6 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
-  import { listen } from "@tauri-apps/api/event";
+  import { listen, TauriEvent } from "@tauri-apps/api/event";
   import { getVersion } from "@tauri-apps/api/app";
   import { openUrl } from "@tauri-apps/plugin-opener";
   import { onMount } from "svelte";
@@ -168,9 +168,15 @@
     const ids = new Set(servers.map((x) => x.id));
     for (const id of Object.keys(statuses)) if (!ids.has(id)) delete statuses[id];
 
-    // Le seul champ Rocket League qui change sans que le membre ait rien
-    // fait : on le sonde ici plutôt que de rappeler rl_status, qui peut
-    // énumérer les processus de la machine pour trouver l'installation.
+    await pollRlMismatch();
+  }
+
+  // Le seul champ Rocket League qui change sans que le membre ait rien fait :
+  // on le sonde à part plutôt que de rappeler rl_status, qui peut énumérer
+  // les processus de la machine pour trouver l'installation. Rappelé par
+  // l'intervalle existant ET quand la fenêtre reprend le focus, puisque
+  // c'est exactement l'instant où le membre regarde l'écran.
+  async function pollRlMismatch() {
     if (rl) {
       try {
         rl.last_mismatch = await invoke<string>("rl_last_mismatch");
@@ -224,6 +230,9 @@
         }
       }),
       listen("kfire://detection", () => refreshState()),
+      // Le moment où il regarde vraiment l'écran : plus fiable qu'un minuteur
+      // qu'une fenêtre mise en arrière-plan pourrait voir ralentir.
+      listen(TauriEvent.WINDOW_FOCUS, () => pollRlMismatch()),
     ];
     return () => {
       clearInterval(interval);
