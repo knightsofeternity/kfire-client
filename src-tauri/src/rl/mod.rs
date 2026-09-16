@@ -10,9 +10,7 @@ pub mod config;
 pub mod frames;
 pub mod parser;
 pub mod paths;
-
-// `pub mod socket;` n'est PAS déclaré ici : ce fichier arrive à la tâche 6.
-// Le déclarer maintenant casserait la compilation.
+pub mod socket;
 
 use serde_json::{json, Value};
 
