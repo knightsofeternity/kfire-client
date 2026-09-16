@@ -493,6 +493,9 @@ struct RlStatus {
     /// Le pseudo Rocket League du membre. Il ne quitte jamais cette machine :
     /// il sert à retrouver sa ligne dans la feuille de match.
     player_name: String,
+    /// Les pseudos vus au dernier match qui n'a correspondu à personne, s'il y
+    /// en a eu un. Uniquement pour que le membre corrige son réglage lui-même.
+    last_mismatch: String,
 }
 
 #[tauri::command]
@@ -508,6 +511,7 @@ fn rl_status(state: tauri::State<'_, AppState>) -> RlStatus {
         config_block: crate::rl::config::STATS_BLOCK.trim_start().to_string(),
         install_dir: dir.map(|p| p.to_string_lossy().to_string()),
         player_name: state.db.get_setting("rl_player_name").unwrap_or_default(),
+        last_mismatch: state.db.get_setting("rl_last_mismatch").unwrap_or_default(),
     }
 }
 

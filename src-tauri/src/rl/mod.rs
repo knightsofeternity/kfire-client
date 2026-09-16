@@ -123,13 +123,14 @@ pub fn start_watching(
     if db.get_setting("rl_enabled").as_deref() != Some("1") {
         return;
     }
-    let Some(member) = db
+    if db
         .get_setting("rl_player_name")
         .filter(|n| !n.trim().is_empty())
-    else {
+        .is_none()
+    {
         log::info!("rl: no player name set, not watching");
         return;
-    };
+    }
     let Some(install) = installed_dir(&db) else {
         log::info!("rl: install directory not found, not watching");
         return;
@@ -153,14 +154,19 @@ pub fn start_watching(
         socket::follow(port, &STOP, |ev| match ev {
             socket::Event::Open => {
                 if current.is_none() {
-                    current = Some(parser::Match::new(&member));
+                    // Lu à chaque match, pas une fois par lancement du jeu : un
+                    // pseudo corrigé pendant la partie s'applique au match
+                    // SUIVANT, pas au prochain lancement.
+                    let name = db.get_setting("rl_player_name").unwrap_or_default();
+                    current = Some(parser::Match::new(&name));
                     started_at = std::time::Instant::now();
                 }
             }
             socket::Event::State(data) => {
                 let m = current.get_or_insert_with(|| {
                     started_at = std::time::Instant::now();
-                    parser::Match::new(&member)
+                    let name = db.get_setting("rl_player_name").unwrap_or_default();
+                    parser::Match::new(&name)
                 });
                 m.observe(&data);
                 if last_live.elapsed() >= LIVE_EVERY {
@@ -208,6 +214,10 @@ pub fn start_watching(
                              Names in that match: {}. Set yours in the settings.",
                             names.join(", ")
                         );
+                        // Écrit là où le membre regarde vraiment. Une ligne de
+                        // journal ne sert à rien : personne n'ouvre un fichier
+                        // de journal. L'écran de réglages, si.
+                        db.set_setting("rl_last_mismatch", &names.join(", "));
                     }
                     return;
                 };
@@ -243,6 +253,8 @@ pub fn start_watching(
                     );
                 }
                 notify.notify_one();
+                // Ça a marché : on efface l'avertissement précédent.
+                db.set_setting("rl_last_mismatch", "");
                 log::info!(
                     "rl: queued a {} on playlist {}",
                     summary.result,

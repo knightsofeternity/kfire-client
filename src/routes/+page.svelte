@@ -74,6 +74,7 @@
     config_block: string;
     install_dir: string | null;
     player_name: string;
+    last_mismatch: string;
   };
 
   let rl = $state<RlStatus | null>(null);
@@ -433,6 +434,14 @@
           ligne dans la feuille de match, jamais envoyé au serveur.
         </p>
 
+        {#if rl.last_mismatch}
+          <p class="warning" role="status">
+            Votre dernier match n'a correspondu à personne. Le jeu a vu ces pseudos :
+            {rl.last_mismatch}. L'un d'eux est le vôtre : copiez-le exactement dans le champ
+            ci-dessus.
+          </p>
+        {/if}
+
         {#if !rl.install_dir}
           <p class="muted small">
             Dossier d'installation introuvable. Lancez Rocket League une fois, puis rouvrez cet
@@ -544,6 +553,7 @@
   .muted { color: #6b7280; font-size: 0.85rem; margin: 0; }
   .muted.small { font-size: 0.75rem; }
   .error { color: #ef4444; font-size: 0.85rem; margin: 0; }
+  .warning { color: #f59e0b; font-size: 0.85rem; margin: 0; }
   .toggle { flex-direction: row; align-items: center; gap: 0.5rem; cursor: pointer; color: #9ca3af; font-size: 0.85rem; margin-top: 0.4rem; }
   .toggle input { accent-color: #f97316; width: 1rem; height: 1rem; cursor: pointer; }
   footer { margin-top: auto; display: flex; flex-direction: column; gap: 0.3rem; }
