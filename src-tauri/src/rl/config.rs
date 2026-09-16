@@ -43,13 +43,81 @@ pub fn with_stats_block(contents: &str) -> String {
 
 /// Le contenu sans la section, à condition qu'elle soit la nôtre.
 ///
+/// Le retrait se fait ligne à ligne et non par correspondance exacte, parce
+/// qu'un fichier ouvert dans le Bloc-notes revient en CRLF. Avec une
+/// correspondance exacte, désactiver le suivi ne ferait alors RIEN : l'écran
+/// confirmerait au membre que c'est coupé pendant que le jeu continuerait
+/// d'exporter. Quelqu'un qui demande à ne plus être suivi doit vraiment cesser
+/// de l'être.
+///
 /// On ne retire que ce qu'on a écrit : casser la configuration d'un autre
-/// traqueur en se désactivant serait inacceptable.
+/// traqueur en se désactivant serait inacceptable. La section n'est reconnue
+/// comme nôtre que si ses réglages sont exactement les nôtres.
 pub fn without_stats_block(contents: &str) -> String {
-    if !contents.contains(STATS_BLOCK) {
+    let eol = if contents.contains("\r\n") {
+        "\r\n"
+    } else {
+        "\n"
+    };
+    let lines: Vec<&str> = contents
+        .split('\n')
+        .map(|l| l.trim_end_matches('\r'))
+        .collect();
+
+    let Some(start) = lines
+        .iter()
+        .position(|l| l.trim().to_ascii_lowercase() == SECTION)
+    else {
+        return contents.to_string();
+    };
+    // La section court jusqu'à la suivante, ou jusqu'à la fin.
+    let end = lines[start + 1..]
+        .iter()
+        .position(|l| l.trim().starts_with('['))
+        .map(|i| start + 1 + i)
+        .unwrap_or(lines.len());
+
+    if !is_ours(&lines[start + 1..end]) {
         return contents.to_string();
     }
-    contents.replace(STATS_BLOCK, "")
+
+    let mut kept: Vec<&str> = Vec::with_capacity(lines.len());
+    kept.extend_from_slice(&lines[..start]);
+    kept.extend_from_slice(&lines[end..]);
+    // La ligne vide que notre bloc avait ajoutée avant lui repart avec.
+    while kept.last().is_some_and(|l| l.trim().is_empty()) {
+        kept.pop();
+    }
+    if kept.is_empty() {
+        return String::new();
+    }
+    let mut out = kept.join(eol);
+    out.push_str(eol);
+    out
+}
+
+/// Si les réglages de cette section sont exactement ceux que nous écrivons.
+///
+/// C'est ce qui distingue notre bloc de celui d'un autre traqueur, maintenant
+/// que la comparaison n'est plus littérale.
+fn is_ours(body: &[&str]) -> bool {
+    let mut port = false;
+    let mut rate = false;
+    for l in body {
+        let t = l.trim();
+        if t.is_empty() {
+            continue;
+        }
+        let Some((k, v)) = t.split_once('=') else {
+            return false;
+        };
+        match (k.trim().to_ascii_lowercase().as_str(), v.trim()) {
+            ("port", "49123") => port = true,
+            ("packetsendrate", "30") => rate = true,
+            _ => return false,
+        }
+    }
+    port && rate
 }
 
 /// Le port que le jeu écoutera, d'après le fichier.
@@ -158,5 +226,51 @@ mod tests {
         assert!(!has_stats_section(""));
         assert!(has_stats_section("[TAGame.MatchStatsExporter_TA]\n"));
         assert!(has_stats_section("x\n[tagame.matchstatsexporter_ta]\ny\n"));
+    }
+
+    #[test]
+    fn removing_works_on_a_file_that_came_back_from_notepad() {
+        // Le Bloc-notes réécrit tout le fichier en CRLF. Avec une
+        // correspondance exacte, le retrait ne faisait rien du tout.
+        let unix = with_stats_block("[SomethingElse]\nKey=1\n");
+        let crlf = unix.replace('\n', "\r\n");
+        let out = without_stats_block(&crlf);
+        assert!(
+            !has_stats_section(&out),
+            "notre bloc devait partir : {out:?}"
+        );
+        assert!(out.contains("Key=1"), "le reste du fichier devait rester");
+    }
+
+    #[test]
+    fn removing_a_crlf_file_keeps_it_in_crlf() {
+        let crlf = with_stats_block("[SomethingElse]\nKey=1\n").replace('\n', "\r\n");
+        let out = without_stats_block(&crlf);
+        assert!(
+            out.contains("\r\n"),
+            "les fins de ligne du membre sont les siennes"
+        );
+        assert!(!out.contains("\n\n"), "pas de ligne vide parasite");
+    }
+
+    #[test]
+    fn removing_still_leaves_someone_elses_block_alone_in_crlf_too() {
+        let theirs = "[TAGame.MatchStatsExporter_TA]\r\nPort=50000\r\nPacketSendRate=120\r\n";
+        assert_eq!(without_stats_block(theirs), theirs);
+    }
+
+    #[test]
+    fn a_section_with_an_extra_key_is_not_ours() {
+        // Quelqu'un a ajouté un réglage au nôtre : ce n'est plus le nôtre, on
+        // n'y touche pas.
+        let mixed =
+            "[TAGame.MatchStatsExporter_TA]\nPort=49123\nPacketSendRate=30\nSomethingElse=1\n";
+        assert_eq!(without_stats_block(mixed), mixed);
+    }
+
+    #[test]
+    fn removing_our_block_from_a_file_that_holds_nothing_else_empties_it() {
+        let only_ours = with_stats_block("");
+        assert_eq!(without_stats_block(&only_ours), "");
     }
 }
