@@ -13,6 +13,14 @@ pub const TRAINING: &[i64] = &[0, 9, 19, 21, 73];
 /// Les playlists classées, d'après le catalogue Psyonix.
 pub const RANKED: &[i64] = &[10, 11, 13, 27, 28, 29, 30];
 
+/// Combien de pseudos distincts on retient au plus.
+///
+/// Ce n'est pas de la méfiance envers le jeu, qui tourne sur la machine du
+/// membre : c'est que cet ensemble ne sert qu'à écrire UNE ligne de journal,
+/// et qu'une ligne de journal n'a pas besoin de plus. Un match réel en compte
+/// huit au maximum, remplaçants compris.
+const MAX_NAMES_SEEN: usize = 32;
+
 /// Si cette playlist est classée.
 pub fn is_ranked(playlist: i64) -> bool {
     RANKED.contains(&playlist)
@@ -142,15 +150,18 @@ impl Match {
     /// Prend en compte un `UpdateState`.
     pub fn observe(&mut self, data: &Value) {
         if let Some(g) = data.get("MatchGuid").and_then(Value::as_str) {
-            if !g.is_empty() {
+            // Le GUID est le même à chaque image d'un match : ne le réécrire
+            // que s'il a vraiment changé.
+            if !g.is_empty() && self.guid.as_deref() != Some(g) {
                 self.guid = Some(g.to_string());
             }
         }
 
-        let game = data.get("Game").cloned().unwrap_or(Value::Null);
-        if game.is_object() {
-            self.playlist = i(&game, "Playlist");
-            self.seconds = i(&game, "TimeSeconds");
+        // Emprunté, jamais cloné : on ne lit ici que quatre nombres, et cette
+        // fonction tourne trente fois par seconde pendant tout le match.
+        if let Some(game) = data.get("Game").filter(|g| g.is_object()) {
+            self.playlist = i(game, "Playlist");
+            self.seconds = i(game, "TimeSeconds");
             self.overtime = game
                 .get("bOvertime")
                 .and_then(Value::as_bool)
@@ -188,7 +199,12 @@ impl Match {
                 _ => {}
             }
             if let Some(n) = p.get("Name").and_then(Value::as_str) {
-                self.names_seen.insert(n.to_string());
+                // contains() prend un &str sans allouer ; seul un nom vraiment
+                // nouveau paie une String, soit une poignée par match au lieu
+                // d'une par joueur et par image.
+                if !self.names_seen.contains(n) && self.names_seen.len() < MAX_NAMES_SEEN {
+                    self.names_seen.insert(n.to_string());
+                }
             }
             if same_player(p.get("Name").and_then(Value::as_str), &self.member) {
                 self.mine = Some(Stats {
@@ -527,5 +543,14 @@ mod tests {
         s["Game"]["bOvertime"] = json!(true);
         m.observe(&s);
         assert!(m.live().unwrap().overtime);
+    }
+
+    #[test]
+    fn the_names_seen_stop_growing_long_before_anything_silly() {
+        let mut m = Match::new("Personne");
+        for n in 0..100 {
+            m.observe(&state(13, 0, 0, json!([them(&format!("joueur{n}"), 0, 1)])));
+        }
+        assert_eq!(m.names_seen().len(), MAX_NAMES_SEEN);
     }
 }
