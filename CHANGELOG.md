@@ -7,6 +7,26 @@ Release, so every version MUST have its own section here before it is tagged.
 The release build fails when one is missing, which is deliberate: publishing a
 version under the previous one's notes has already happened once.
 
+## 0.6.0-beta.3
+
+**Still a beta of 0.6.0, for one tester.** Published as a pre-release, so the
+update indicator in everybody else's client keeps pointing at 0.5.0.
+
+**What this build fixes:** no Rocket League match was ever recorded, and the
+settings screen blamed your player name for it.
+
+The client expected the game to say which playlist a match was played in. The
+game never does: that field does not exist in Rocket League's statistics
+protocol. Read as missing, it came out as the identifier of free play, so every
+single match was refused as training before your name was even looked at. Then
+the settings screen showed the "your name matched nobody" warning for any
+refusal, which is why it could list your own name while claiming not to find it.
+
+Training is now told apart from a real match with something the game actually
+sends: a match has at least one player on the other team. The name warning only
+appears when your name is really the problem; any other refusal is written to
+the log with its actual reason.
+
 ## 0.6.0-beta.2
 
 **Still a beta of 0.6.0, for one tester.** Published as a pre-release, so the
