@@ -113,6 +113,21 @@ pub fn stop_watching() {
     STOP.store(true, Ordering::SeqCst);
 }
 
+/// Si un fil de suivi tourne en ce moment.
+pub fn is_watching() -> bool {
+    !STOP.load(Ordering::SeqCst)
+}
+
+/// Si ce fil est effectivement connecté à la socket du jeu.
+pub fn is_socket_connected() -> bool {
+    socket::connected()
+}
+
+/// Combien de messages du jeu ont été décodés.
+pub fn decoded_messages() -> u64 {
+    socket::decoded()
+}
+
 /// Commence à suivre la socket, sauf si le membre n'a pas activé le suivi ou
 /// n'a pas déclaré son pseudo.
 pub fn start_watching(
@@ -121,13 +136,11 @@ pub fn start_watching(
     live: tokio::sync::watch::Sender<Option<String>>,
 ) {
     if db.get_setting("rl_enabled").as_deref() != Some("1") {
+        log::info!("rl: tracking is off in the settings, not watching");
         return;
     }
-    if db
-        .get_setting("rl_player_name")
-        .filter(|n| !n.trim().is_empty())
-        .is_none()
-    {
+    let name = db.get_setting("rl_player_name").unwrap_or_default();
+    if name.trim().is_empty() {
         log::info!("rl: no player name set, not watching");
         return;
     }
@@ -135,7 +148,8 @@ pub fn start_watching(
         log::info!("rl: install directory not found, not watching");
         return;
     };
-    let port = std::fs::read_to_string(paths::config_path_in(&install.to_string_lossy()))
+    let config_path = paths::config_path_in(&install.to_string_lossy());
+    let port = std::fs::read_to_string(&config_path)
         .map(|c| config::port_in(&c))
         .unwrap_or(config::DEFAULT_PORT);
 
@@ -144,6 +158,17 @@ pub fn start_watching(
     if !STOP.swap(false, Ordering::SeqCst) {
         return;
     }
+
+    // On ne journalise jamais le pseudo lui-même : c'est le pseudonyme du
+    // membre, il n'a rien à faire dans un fichier de journal. Seulement le
+    // fait qu'il soit réglé, et sa longueur.
+    let name_or_placeholder = format!("name set ({} chars)", name.trim().chars().count());
+    log::info!(
+        "rl: tracking {} on port {} (config: {})",
+        name_or_placeholder,
+        port,
+        config_path
+    );
 
     std::thread::spawn(move || {
         let mut current: Option<parser::Match> = None;
