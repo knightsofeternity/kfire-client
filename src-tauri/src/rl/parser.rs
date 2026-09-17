@@ -31,10 +31,49 @@ pub fn is_training(playlist: i64) -> bool {
     TRAINING.contains(&playlist)
 }
 
+/// Les raisons pour lesquelles un match n'est pas rapporté.
+///
+/// `finish()` en rend exactement une : jamais une combinaison, jamais un
+/// `None` muet. Chaque variante dit la vérité qu'elle constate, pas une
+/// hypothèse sur sa cause.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Refusal {
+    /// Aucun `UpdateState` n'a jamais été reçu : il n'y a rien à résumer.
+    NeverObserved,
+    /// Un des deux camps n'a jamais compté le moindre joueur. La partie libre
+    /// et l'entraînement n'ont personne en face ; un vrai match, si.
+    NoOpponent,
+    /// Le jeu a vraiment envoyé une playlist, et c'est une playlist
+    /// d'entraînement d'après le catalogue Psyonix.
+    TrainingPlaylist(i64),
+    /// La taille d'équipe observée (le plus grand effectif vu dans un camp)
+    /// sort de la plage plausible pour Rocket League.
+    TeamSizeOutOfRange(i64),
+    /// Le pseudo réglé ne correspond à aucun joueur de la feuille de match.
+    MemberNotFound,
+    /// Le membre a été trouvé, mais avec un camp qui n'est ni bleu ni orange.
+    MemberTeamInvalid(i64),
+}
+
+impl std::fmt::Display for Refusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Refusal::NeverObserved => write!(f, "no update was ever observed"),
+            Refusal::NoOpponent => write!(f, "no opponent was ever seen on the other team"),
+            Refusal::TrainingPlaylist(p) => write!(f, "training playlist ({p})"),
+            Refusal::TeamSizeOutOfRange(n) => write!(f, "team size out of range ({n})"),
+            Refusal::MemberNotFound => write!(f, "the configured member name matched nobody"),
+            Refusal::MemberTeamInvalid(t) => write!(f, "the member's team number is invalid ({t})"),
+        }
+    }
+}
+
 /// Le résumé d'un match terminé : uniquement des faits sur le membre.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Summary {
-    pub playlist: i64,
+    /// `None` quand le jeu n'a jamais envoyé cette playlist. C'est la norme :
+    /// le protocole réel de Rocket League n'a pas de champ `Playlist`.
+    pub playlist: Option<i64>,
     pub team_size: i64,
     pub player_team: i64,
     pub team_blue_score: i64,
@@ -81,14 +120,21 @@ struct Stats {
 pub struct Match {
     member: String,
     guid: Option<String>,
-    playlist: i64,
+    /// `None` tant que le jeu n'a jamais envoyé de champ `Playlist`. C'est
+    /// l'état normal : le vrai protocole n'a pas ce champ.
+    playlist: Option<i64>,
     blue: i64,
     orange: i64,
     seconds: i64,
     overtime: bool,
-    /// Le maximum de joueurs vu dans une équipe. Un joueur qui quitte disparaît
-    /// du dernier état, donc seul le maximum dit la vraie taille du match.
-    team_size: i64,
+    /// Le maximum de joueurs vu dans chaque équipe, séparément. Un joueur qui
+    /// quitte disparaît du dernier état, donc seul le maximum dit la vraie
+    /// taille du match. Séparés parce qu'un des deux à zéro veut dire
+    /// « personne en face », donc partie libre ou entraînement, jamais un
+    /// vrai match : c'est la garde principale, plus fiable qu'une playlist
+    /// que le jeu n'envoie pas forcément.
+    max_players_blue: i64,
+    max_players_orange: i64,
     /// Les statistiques du membre, et le meilleur score vu dans chaque équipe.
     mine: Option<Stats>,
     best_blue: i64,
@@ -128,12 +174,13 @@ impl Match {
         Self {
             member: member.to_string(),
             guid: None,
-            playlist: -1,
+            playlist: None,
             blue: 0,
             orange: 0,
             seconds: 0,
             overtime: false,
-            team_size: 0,
+            max_players_blue: 0,
+            max_players_orange: 0,
             mine: None,
             best_blue: 0,
             best_orange: 0,
@@ -160,7 +207,13 @@ impl Match {
         // Emprunté, jamais cloné : on ne lit ici que quatre nombres, et cette
         // fonction tourne trente fois par seconde pendant tout le match.
         if let Some(game) = data.get("Game").filter(|g| g.is_object()) {
-            self.playlist = i(game, "Playlist");
+            // Ne jamais inventer une playlist : le vrai protocole n'a pas ce
+            // champ. `i()` rendrait `0` pour une clé absente, et `0` est une
+            // playlist d'entraînement ; c'est exactement le bug qui refusait
+            // tous les matchs réels.
+            if let Some(p) = game.get("Playlist").and_then(Value::as_i64) {
+                self.playlist = Some(p);
+            }
             self.seconds = i(game, "TimeSeconds");
             self.overtime = game
                 .get("bOvertime")
@@ -218,7 +271,8 @@ impl Match {
                 });
             }
         }
-        self.team_size = self.team_size.max(blue_n).max(orange_n);
+        self.max_players_blue = self.max_players_blue.max(blue_n);
+        self.max_players_orange = self.max_players_orange.max(orange_n);
         self.seen = true;
     }
 
@@ -246,26 +300,37 @@ impl Match {
 
     /// Le résumé, si et seulement si il est COMPLET.
     ///
-    /// Rend `None` dès qu'il manque quelque chose : jamais observé, playlist
-    /// d'entraînement, taille d'équipe impossible, ou statistiques du membre
-    /// absentes. Sa ligne peut manquer du dernier état s'il quitte avant la fin,
-    /// et le code de production de `ke-rl-tracker` garde `if our_player:` pour
-    /// exactement cette raison. Mieux vaut un match manquant qu'un match faux :
-    /// un zéro inventé est indiscernable d'un vrai zéro et empoisonnerait les
-    /// moyennes de la guilde pour toujours.
-    pub fn finish(&self, duration_seconds: i64) -> Option<Summary> {
+    /// Rend la raison précise dès qu'il manque quelque chose : jamais observé,
+    /// pas d'adversaire, playlist d'entraînement (seulement quand le jeu l'a
+    /// vraiment envoyée), taille d'équipe impossible, ou statistiques du
+    /// membre absentes. Sa ligne peut manquer du dernier état s'il quitte
+    /// avant la fin, et le code de production de `ke-rl-tracker` garde
+    /// `if our_player:` pour exactement cette raison. Mieux vaut un match
+    /// manquant qu'un match faux : un zéro inventé est indiscernable d'un vrai
+    /// zéro et empoisonnerait les moyennes de la guilde pour toujours.
+    pub fn finish(&self, duration_seconds: i64) -> Result<Summary, Refusal> {
         if !self.seen {
-            return None;
+            return Err(Refusal::NeverObserved);
         }
-        if self.playlist < 0 || is_training(self.playlist) {
-            return None;
+        // La vraie garde : partie libre et entraînement n'ont personne en
+        // face. Un vrai match, si, toujours, des deux côtés.
+        if self.max_players_blue == 0 || self.max_players_orange == 0 {
+            return Err(Refusal::NoOpponent);
         }
-        if !(1..=4).contains(&self.team_size) {
-            return None;
+        // Gardée pour le jour où Psyonix ajouterait ce champ, mais seulement
+        // quand il est VRAIMENT présent : jamais inventé.
+        if let Some(p) = self.playlist {
+            if is_training(p) {
+                return Err(Refusal::TrainingPlaylist(p));
+            }
         }
-        let mine = self.mine.as_ref()?;
+        let team_size = self.max_players_blue.max(self.max_players_orange);
+        if !(1..=4).contains(&team_size) {
+            return Err(Refusal::TeamSizeOutOfRange(team_size));
+        }
+        let mine = self.mine.as_ref().ok_or(Refusal::MemberNotFound)?;
         if mine.team != 0 && mine.team != 1 {
-            return None;
+            return Err(Refusal::MemberTeamInvalid(mine.team));
         }
 
         let (my_score, their_score) = if mine.team == 0 {
@@ -288,9 +353,9 @@ impl Match {
         };
         let mvp = result == "win" && mine.score >= best_of_mine;
 
-        Some(Summary {
+        Ok(Summary {
             playlist: self.playlist,
-            team_size: self.team_size,
+            team_size,
             player_team: mine.team,
             team_blue_score: self.blue,
             team_orange_score: self.orange,
@@ -311,6 +376,121 @@ impl Match {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// La forme réelle du fil, telle que documentée par l'API Stats de
+    /// Psyonix : `Data.Game` n'a JAMAIS de champ `Playlist`. Ce test est la
+    /// preuve du bug : avec l'ancien code, `i(game, "Playlist")` renvoyait `0`
+    /// pour ce champ absent, `0` est dans `TRAINING`, et le match était refusé
+    /// alors que le membre y était bel et bien, avec un adversaire, une
+    /// victoire nette. Il doit échouer avant le correctif et réussir après.
+    #[test]
+    fn a_real_match_with_no_playlist_field_is_summarised() {
+        let state = json!({
+            "MatchGuid": "g-real-1",
+            "Game": {
+                "TimeSeconds": 0,
+                "bOvertime": false,
+                "bReplay": false,
+                "bHasWinner": true,
+                "Winner": "Blue",
+                "Arena": "Stadium_P",
+                "Teams": [
+                    {"Name": "Blue", "TeamNum": 0, "Score": 5},
+                    {"Name": "Orange", "TeamNum": 1, "Score": 1},
+                ],
+            },
+            "Players": [
+                {
+                    "Name": "Bushido",
+                    "Shortcut": 0,
+                    "TeamNum": 0,
+                    "PrimaryId": "Steam|76561198000000000|0",
+                    "Score": 640,
+                    "Goals": 3,
+                    "Assists": 1,
+                    "Saves": 2,
+                    "Shots": 5,
+                    "Demos": 1,
+                },
+                {
+                    "Name": "Coequipier",
+                    "Shortcut": 1,
+                    "TeamNum": 0,
+                    "PrimaryId": "Epic|abc123|0",
+                    "Score": 300,
+                    "Goals": 2,
+                    "Assists": 0,
+                    "Saves": 0,
+                    "Shots": 3,
+                    "Demos": 0,
+                },
+                {
+                    "Name": "Adversaire1",
+                    "Shortcut": 2,
+                    "TeamNum": 1,
+                    "PrimaryId": "Steam|76561198000000001|0",
+                    "Score": 200,
+                    "Goals": 1,
+                    "Assists": 0,
+                    "Saves": 1,
+                    "Shots": 4,
+                    "Demos": 0,
+                },
+                {
+                    "Name": "Adversaire2",
+                    "Shortcut": 3,
+                    "TeamNum": 1,
+                    "PrimaryId": "Unknown|0|0",
+                    "Score": 150,
+                    "Goals": 0,
+                    "Assists": 1,
+                    "Saves": 0,
+                    "Shots": 2,
+                    "Demos": 0,
+                },
+            ],
+        });
+        let mut m = Match::new("Bushido");
+        m.observe(&state);
+        let s = m
+            .finish(300)
+            .expect("un match réel sans Playlist doit se résumer");
+        assert_eq!(s.playlist, None);
+        assert_eq!(s.result, "win");
+        assert_eq!(s.team_size, 2);
+    }
+
+    /// Sans adversaire, personne en face : partie libre ou entraînement,
+    /// jamais un vrai match. Le membre est seul sur son équipe.
+    #[test]
+    fn a_solo_match_with_nobody_on_the_other_team_has_no_opponent() {
+        let mut m = Match::new("Bushido");
+        m.observe(&state(-1, 0, 0, json!([me(0, 3)])));
+        assert_eq!(m.finish(300), Err(Refusal::NoOpponent));
+    }
+
+    /// Le champ existe vraiment cette fois : la règle historique s'applique
+    /// encore, mais seulement quand la donnée est réellement présente.
+    #[test]
+    fn a_real_match_with_a_present_training_playlist_is_refused() {
+        let mut m = Match::new("Bushido");
+        m.observe(&state(73, 4, 2, json!([me(0, 2), them("x", 1, 100)])));
+        assert_eq!(m.finish(300), Err(Refusal::TrainingPlaylist(73)));
+    }
+
+    /// Le membre est absent de la feuille : c'est le seul cas où le pseudo
+    /// réglé peut vraiment être en cause.
+    #[test]
+    fn a_real_match_without_the_member_is_member_not_found() {
+        let mut m = Match::new("Bushido");
+        m.observe(&state(
+            13,
+            4,
+            2,
+            json!([them("a", 0, 100), them("b", 1, 100)]),
+        ));
+        assert_eq!(m.finish(300), Err(Refusal::MemberNotFound));
+    }
 
     fn state(
         playlist: i64,
@@ -345,7 +525,7 @@ mod tests {
         let mut m = Match::new("Bushido");
         m.observe(&state(13, 4, 2, json!([me(0, 2), them("x", 1, 100)])));
         let s = m.finish(300).expect("un match complet doit se résumer");
-        assert_eq!(s.playlist, 13);
+        assert_eq!(s.playlist, Some(13));
         assert_eq!(s.player_team, 0);
         assert_eq!(s.team_blue_score, 4);
         assert_eq!(s.team_orange_score, 2);
@@ -433,7 +613,10 @@ mod tests {
             2,
             json!([them("a", 0, 100), them("b", 1, 100)]),
         ));
-        assert!(m.finish(300).is_none());
+        // Modifié : `finish` rend désormais un `Result`, la variante exacte
+        // prouve que c'est bien l'absence du membre qui est en cause, pas
+        // l'absence d'adversaire (les deux camps ont un joueur).
+        assert_eq!(m.finish(300), Err(Refusal::MemberNotFound));
     }
 
     #[test]
@@ -441,10 +624,13 @@ mod tests {
         // Le format exact du champ Name n'a jamais été vérifié contre le vrai
         // jeu. Une faute de casse dans le réglage est l'erreur la plus probable,
         // et sans tolérance elle ne produirait AUCUN match, sans rien dire.
+        // Modifié : un adversaire est ajouté, sinon la nouvelle règle
+        // « il faut un adversaire » refuserait le match avant même de
+        // regarder le pseudo.
         for written in ["bushido", "BUSHIDO", "  Bushido  "] {
             let mut m = Match::new(written);
-            m.observe(&state(13, 4, 2, json!([me(0, 2)])));
-            assert!(m.finish(300).is_some(), "{written} aurait dû correspondre");
+            m.observe(&state(13, 4, 2, json!([me(0, 2), them("x", 1, 100)])));
+            assert!(m.finish(300).is_ok(), "{written} aurait dû correspondre");
         }
     }
 
@@ -461,22 +647,33 @@ mod tests {
             0,
             json!([me(0, 1), them("Adversaire", 1, 10)]),
         ));
-        assert!(m.finish(300).is_none(), "un membre absent refuse le match");
+        // Modifié : `finish` rend un `Result` désormais.
+        assert!(m.finish(300).is_err(), "un membre absent refuse le match");
         assert_eq!(m.names_seen(), vec!["Adversaire", "Bushido"]);
     }
 
     #[test]
     fn a_match_never_observed_is_refused() {
-        assert!(Match::new("Bushido").finish(300).is_none());
+        // Modifié : la variante exacte prouve qu'on distingue bien « jamais
+        // observé » des autres refus, maintenant que `finish` rend un `Result`.
+        assert_eq!(
+            Match::new("Bushido").finish(300),
+            Err(Refusal::NeverObserved)
+        );
     }
 
     #[test]
     fn a_training_playlist_is_refused() {
+        // Modifié : un adversaire est ajouté à la feuille. Sans lui, la
+        // nouvelle règle « il faut un adversaire » refuserait le match avec
+        // `NoOpponent` avant même de regarder la playlist, et ce test ne
+        // prouverait plus rien sur la playlist elle-même.
         for playlist in [0, 9, 19, 21, 73] {
             let mut m = Match::new("Bushido");
-            m.observe(&state(playlist, 0, 0, json!([me(0, 0)])));
-            assert!(
-                m.finish(60).is_none(),
+            m.observe(&state(playlist, 0, 0, json!([me(0, 0), them("x", 1, 0)])));
+            assert_eq!(
+                m.finish(60),
+                Err(Refusal::TrainingPlaylist(playlist)),
                 "playlist {playlist} devait être refusée"
             );
         }
@@ -515,13 +712,18 @@ mod tests {
     fn players_are_read_from_the_root_not_from_game() {
         // L'agent Python d'origine cherche Data.Teams et Data.Players au mauvais
         // endroit. Si on recopiait son erreur, rien ne serait jamais lu.
+        //
+        // Modifié : un adversaire est ajouté à la racine, sinon la nouvelle
+        // règle « il faut un adversaire » refuserait le match (un seul joueur,
+        // côté bleu, dans les Players de la racine) avant de prouver quoi que
+        // ce soit sur l'emplacement lu.
         let mut m = Match::new("Bushido");
         m.observe(&json!({
             "MatchGuid": "g",
             "Game": {"Playlist": 13, "TimeSeconds": 10, "bOvertime": false,
                      "Teams": [{"TeamNum": 0, "Score": 1}, {"TeamNum": 1, "Score": 0}],
                      "Players": [me(1, 9)]},
-            "Players": [me(0, 1)],
+            "Players": [me(0, 1), them("x", 1, 0)],
         }));
         let s = m.finish(300).unwrap();
         assert_eq!(s.player_team, 0, "Players à la racine fait foi");

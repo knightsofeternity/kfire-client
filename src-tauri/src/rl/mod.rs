@@ -23,24 +23,28 @@ pub const SLUG: &str = "rocket-league";
 /// qui quitte cette machine. Le flux du jeu porte le nom de tous les joueurs ;
 /// il n'en reste ici que des nombres.
 pub fn payload(s: &parser::Summary, slug: &str, played_at: chrono::DateTime<chrono::Utc>) -> Value {
-    json!({
-        "game_slug": slug,
-        "playlist": s.playlist,
-        "team_size": s.team_size,
-        "player_team": s.player_team,
-        "team_blue_score": s.team_blue_score,
-        "team_orange_score": s.team_orange_score,
-        "result": s.result,
-        "goals": s.goals,
-        "assists": s.assists,
-        "saves": s.saves,
-        "shots": s.shots,
-        "score": s.score,
-        "demos": s.demos,
-        "mvp": s.mvp,
-        "duration_seconds": s.duration_seconds,
-        "played_at": played_at.to_rfc3339(),
-    })
+    let mut o = serde_json::Map::new();
+    o.insert("game_slug".into(), slug.into());
+    // Omise, jamais `null`, quand le jeu n'a pas envoyé de playlist : c'est la
+    // norme pour le vrai protocole, pas une exception.
+    if let Some(p) = s.playlist {
+        o.insert("playlist".into(), p.into());
+    }
+    o.insert("team_size".into(), s.team_size.into());
+    o.insert("player_team".into(), s.player_team.into());
+    o.insert("team_blue_score".into(), s.team_blue_score.into());
+    o.insert("team_orange_score".into(), s.team_orange_score.into());
+    o.insert("result".into(), s.result.clone().into());
+    o.insert("goals".into(), s.goals.into());
+    o.insert("assists".into(), s.assists.into());
+    o.insert("saves".into(), s.saves.into());
+    o.insert("shots".into(), s.shots.into());
+    o.insert("score".into(), s.score.into());
+    o.insert("demos".into(), s.demos.into());
+    o.insert("mvp".into(), s.mvp.into());
+    o.insert("duration_seconds".into(), s.duration_seconds.into());
+    o.insert("played_at".into(), played_at.to_rfc3339().into());
+    Value::Object(o)
 }
 
 /// L'état diffusé pendant le match, et rien d'autre.
@@ -219,32 +223,50 @@ pub fn start_watching(
 
                 let seconds = started_at.elapsed().as_secs() as i64;
                 let names = m.names_seen();
-                let Some(summary) = m.finish(seconds) else {
-                    // Le contrat de complétude : mieux vaut un match manquant
-                    // qu'un match faux. Dire pourquoi, sinon personne ne saura.
-                    log::info!(
-                        "rl: a match went unreported, the summary was incomplete \
-                         (guid={:?}, {}s)",
-                        last_guid,
-                        seconds
-                    );
-                    // Le cas de loin le plus probable : le pseudo réglé ne
-                    // correspond à personne. On écrit les noms vus dans le
-                    // journal LOCAL, qui ne quitte pas cette machine, pour que
-                    // le membre se corrige tout seul. Sans cela il ne verrait
-                    // qu'un silence.
-                    if !names.is_empty() {
+                let summary = match m.finish(seconds) {
+                    Ok(summary) => summary,
+                    // Le seul cas où le pseudo réglé peut vraiment être en
+                    // cause : il ne correspond à personne dans la feuille.
+                    // On écrit les noms vus dans le journal LOCAL, qui ne
+                    // quitte pas cette machine, pour que le membre se corrige
+                    // tout seul. Sans cela il ne verrait qu'un silence.
+                    Err(parser::Refusal::MemberNotFound) => {
                         log::info!(
-                            "rl: the configured player name matched nobody. \
-                             Names in that match: {}. Set yours in the settings.",
-                            names.join(", ")
+                            "rl: a match went unreported, the summary was incomplete \
+                             (guid={:?}, {}s): {}",
+                            last_guid,
+                            seconds,
+                            parser::Refusal::MemberNotFound
                         );
-                        // Écrit là où le membre regarde vraiment. Une ligne de
-                        // journal ne sert à rien : personne n'ouvre un fichier
-                        // de journal. L'écran de réglages, si.
-                        db.set_setting("rl_last_mismatch", &names.join(", "));
+                        if !names.is_empty() {
+                            log::info!(
+                                "rl: the configured player name matched nobody. \
+                                 Names in that match: {}. Set yours in the settings.",
+                                names.join(", ")
+                            );
+                            // Écrit là où le membre regarde vraiment. Une ligne
+                            // de journal ne sert à rien : personne n'ouvre un
+                            // fichier de journal. L'écran de réglages, si.
+                            db.set_setting("rl_last_mismatch", &names.join(", "));
+                        }
+                        return;
                     }
-                    return;
+                    // Toute autre raison : le membre a bien été trouvé, donc
+                    // son pseudo est le bon. Afficher l'avertissement de pseudo
+                    // ici mentirait. On journalise la vraie raison, et on
+                    // efface un avertissement qui pourrait dater d'un match
+                    // précédent : il ne le concerne plus.
+                    Err(other) => {
+                        log::info!(
+                            "rl: a match went unreported, the summary was incomplete \
+                             (guid={:?}, {}s): {}",
+                            last_guid,
+                            seconds,
+                            other
+                        );
+                        db.set_setting("rl_last_mismatch", "");
+                        return;
+                    }
                 };
 
                 // Le résumé a été produit, donc le pseudo réglé a bien trouvé
@@ -287,7 +309,7 @@ pub fn start_watching(
                 }
                 notify.notify_one();
                 log::info!(
-                    "rl: queued a {} on playlist {}",
+                    "rl: queued a {} on playlist {:?}",
                     summary.result,
                     summary.playlist
                 );
@@ -304,7 +326,7 @@ mod tests {
 
     fn a_summary() -> Summary {
         Summary {
-            playlist: 13,
+            playlist: Some(13),
             team_size: 3,
             player_team: 0,
             team_blue_score: 4,
@@ -328,7 +350,9 @@ mod tests {
     }
 
     #[test]
-    fn the_payload_carries_exactly_the_sixteen_allowed_fields() {
+    fn the_payload_carries_exactly_the_sixteen_allowed_fields_when_a_playlist_is_present() {
+        // Épingle le jeu complet quand le résumé porte une playlist (le jour
+        // où Psyonix l'ajouterait, ou dans les tests qui la fixent).
         let v = payload(&a_summary(), SLUG, at());
         let o = v.as_object().unwrap();
         let mut keys: Vec<&str> = o.keys().map(String::as_str).collect();
@@ -354,6 +378,41 @@ mod tests {
                 "team_size"
             ]
         );
+    }
+
+    #[test]
+    fn the_payload_omits_playlist_entirely_when_the_game_never_sent_one() {
+        // C'est la norme, pas l'exception : le vrai protocole n'a pas de champ
+        // Playlist. La clé doit être ABSENTE, jamais envoyée comme `null` :
+        // c'est le même ensemble que le test ci-dessus, moins "playlist", pas
+        // un "au plus" qui laisserait passer n'importe quoi d'autre.
+        let mut s = a_summary();
+        s.playlist = None;
+        let v = payload(&s, SLUG, at());
+        let o = v.as_object().unwrap();
+        let mut keys: Vec<&str> = o.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec![
+                "assists",
+                "demos",
+                "duration_seconds",
+                "game_slug",
+                "goals",
+                "mvp",
+                "played_at",
+                "player_team",
+                "result",
+                "saves",
+                "score",
+                "shots",
+                "team_blue_score",
+                "team_orange_score",
+                "team_size"
+            ]
+        );
+        assert!(!v.to_string().contains("playlist"));
     }
 
     #[test]
