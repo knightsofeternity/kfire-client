@@ -87,5 +87,10 @@ jobs:
 
             ${{ steps.notes.outputs.body }}
           releaseDraft: false
-          prerelease: false
+          # A tag carrying a suffix, such as v0.6.0-beta.1, is a pre-release.
+          # This is not cosmetic: the built-in update indicator reads
+          # /releases/latest, which GitHub only serves from non-pre-releases.
+          # Publishing a beta as a normal release would offer it to every member
+          # of the guild, which is the opposite of handing it to one tester.
+          prerelease: ${{ contains(github.ref_name, '-') }}
           args: ${{ matrix.args }}
