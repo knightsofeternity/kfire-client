@@ -75,6 +75,14 @@
     install_dir: string | null;
     player_name: string;
     last_mismatch: string;
+    watching: boolean;
+    socket_connected: boolean;
+  };
+
+  type RlLive = {
+    last_mismatch: string;
+    watching: boolean;
+    socket_connected: boolean;
   };
 
   let rl = $state<RlStatus | null>(null);
@@ -84,7 +92,9 @@
 
   async function loadRl() {
     try {
-      rl = await invoke<RlStatus>("rl_status");
+      const s = await invoke<Omit<RlStatus, "watching" | "socket_connected">>("rl_status");
+      const live = await invoke<RlLive>("rl_live");
+      rl = { ...s, watching: live.watching, socket_connected: live.socket_connected };
       rlName = rl.player_name;
     } catch {
       rl = null;
@@ -171,15 +181,18 @@
     await pollRlMismatch();
   }
 
-  // Le seul champ Rocket League qui change sans que le membre ait rien fait :
-  // on le sonde à part plutôt que de rappeler rl_status, qui peut énumérer
+  // Les champs Rocket League qui changent sans que le membre ait rien fait :
+  // on les sonde à part plutôt que de rappeler rl_status, qui peut énumérer
   // les processus de la machine pour trouver l'installation. Rappelé par
   // l'intervalle existant ET quand la fenêtre reprend le focus, puisque
   // c'est exactement l'instant où le membre regarde l'écran.
   async function pollRlMismatch() {
     if (rl) {
       try {
-        rl.last_mismatch = await invoke<string>("rl_last_mismatch");
+        const live = await invoke<RlLive>("rl_live");
+        rl.last_mismatch = live.last_mismatch;
+        rl.watching = live.watching;
+        rl.socket_connected = live.socket_connected;
       } catch {
         // Le reste de l'écran RL reste inchangé si l'appel échoue.
       }
@@ -453,6 +466,19 @@
           Ce pseudo ne quitte jamais cet ordinateur : il sert uniquement à retrouver votre
           ligne dans la feuille de match, jamais envoyé au serveur.
         </p>
+
+        {#if rl.enabled}
+          {#if !rl.watching}
+            <p class="muted small">Rocket League n'est pas lancé.</p>
+          {:else if !rl.socket_connected}
+            <p class="warning" role="status">
+              En attente de la socket du jeu. Si tu viens d'activer le suivi, redémarre Rocket
+              League : le jeu ne lit sa configuration qu'au démarrage.
+            </p>
+          {:else}
+            <p class="muted small">Connecté à Rocket League.</p>
+          {/if}
+        {/if}
 
         {#if rl.last_mismatch}
           <p class="warning" role="status">
