@@ -557,13 +557,13 @@ fn rl_set_player_name(state: tauri::State<'_, AppState>, name: String) {
     state.db.set_setting("rl_player_name", name.trim());
 }
 
-/// Les trois champs Rocket League qui changent sans que le membre ait rien
-/// fait, donc les seuls qu'il faille sonder.
+/// Les champs Rocket League qui changent sans que le membre ait rien fait,
+/// donc les seuls qu'il faille sonder.
 ///
 /// Volontairement séparé de `rl_status` : celui-ci peut énumérer les
 /// processus de la machine pour trouver l'installation, ce qu'on ne fait pas
 /// toutes les quatre secondes. Cette commande, elle, ne fait rien d'autre que
-/// lire les réglages et deux booléens atomiques.
+/// lire les réglages et quelques atomiques.
 #[derive(serde::Serialize)]
 struct RlLive {
     /// Les pseudos du dernier match qui n'a correspondu à personne.
@@ -572,6 +572,8 @@ struct RlLive {
     watching: bool,
     /// Si ce fil est connecté à la socket du jeu.
     socket_connected: bool,
+    /// Combien de messages du jeu ont été décodés depuis le lancement.
+    decoded: u64,
 }
 
 #[tauri::command]
@@ -580,6 +582,7 @@ fn rl_live(state: tauri::State<'_, AppState>) -> RlLive {
         last_mismatch: state.db.get_setting("rl_last_mismatch").unwrap_or_default(),
         watching: crate::rl::is_watching(),
         socket_connected: crate::rl::is_socket_connected(),
+        decoded: crate::rl::decoded_messages(),
     }
 }
 

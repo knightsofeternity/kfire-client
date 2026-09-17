@@ -77,12 +77,14 @@
     last_mismatch: string;
     watching: boolean;
     socket_connected: boolean;
+    decoded: number;
   };
 
   type RlLive = {
     last_mismatch: string;
     watching: boolean;
     socket_connected: boolean;
+    decoded: number;
   };
 
   let rl = $state<RlStatus | null>(null);
@@ -92,9 +94,16 @@
 
   async function loadRl() {
     try {
-      const s = await invoke<Omit<RlStatus, "watching" | "socket_connected">>("rl_status");
+      const s = await invoke<Omit<RlStatus, "watching" | "socket_connected" | "decoded">>(
+        "rl_status",
+      );
       const live = await invoke<RlLive>("rl_live");
-      rl = { ...s, watching: live.watching, socket_connected: live.socket_connected };
+      rl = {
+        ...s,
+        watching: live.watching,
+        socket_connected: live.socket_connected,
+        decoded: live.decoded,
+      };
       rlName = rl.player_name;
     } catch {
       rl = null;
@@ -193,6 +202,7 @@
         rl.last_mismatch = live.last_mismatch;
         rl.watching = live.watching;
         rl.socket_connected = live.socket_connected;
+        rl.decoded = live.decoded;
       } catch {
         // Le reste de l'écran RL reste inchangé si l'appel échoue.
       }
@@ -475,8 +485,13 @@
               En attente de la socket du jeu. Si tu viens d'activer le suivi, redémarre Rocket
               League : le jeu ne lit sa configuration qu'au démarrage.
             </p>
+          {:else if rl.decoded > 0}
+            <p class="muted small">Connecté à Rocket League, {rl.decoded} messages reçus.</p>
           {:else}
-            <p class="muted small">Connecté à Rocket League.</p>
+            <p class="warning" role="status">
+              Connecté à Rocket League, mais le jeu n'envoie rien. Lance une partie : la
+              socket ne parle qu'en match.
+            </p>
           {/if}
         {/if}
 

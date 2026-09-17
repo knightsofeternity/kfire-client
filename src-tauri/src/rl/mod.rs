@@ -123,6 +123,11 @@ pub fn is_socket_connected() -> bool {
     socket::connected()
 }
 
+/// Combien de messages du jeu ont été décodés.
+pub fn decoded_messages() -> u64 {
+    socket::decoded()
+}
+
 /// Commence à suivre la socket, sauf si le membre n'a pas activé le suivi ou
 /// n'a pas déclaré son pseudo.
 pub fn start_watching(
