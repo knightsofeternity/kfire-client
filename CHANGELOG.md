@@ -7,6 +7,34 @@ Release, so every version MUST have its own section here before it is tagged.
 The release build fails when one is missing, which is deliberate: publishing a
 version under the previous one's notes has already happened once.
 
+## 0.6.0-beta.1
+
+**A beta of 0.6.0, for one tester.** This build is not offered to anyone else:
+it is published as a pre-release, so the update indicator in everybody's client
+keeps pointing at 0.5.0.
+
+**New in this version:** KFIRE records your Rocket League matches. The game has
+no player API, so the client reads the statistics socket the game opens on your
+own machine, and sends nothing but a summary: the playlist, the result, both
+team scores, and your own goals, assists, saves, shots, score and demolitions.
+While you play, it also shows the live score on the guild portal, which is
+broadcast and never stored anywhere.
+
+The game must be told to open that socket, so the client writes one block into
+a file in its install directory. It shows you the exact path and the exact
+contents before you agree, and turning the tracking off takes the block back
+out. **The game only reads that file when it starts**, so restart Rocket League
+after enabling it.
+
+Rocket League does not say which of the players in a match is you, so you have
+to type your in-game name in the settings. That name never leaves your machine:
+it only picks your row out of the scoresheet. If it matches nobody, the settings
+screen shows you the names the game actually used, so you can copy the right one.
+
+The other players in a match, team-mates and opponents alike, are named in what
+the game sends. None of them ever leaves your machine, and the server has no
+column that could hold a name either.
+
 ## 0.5.0
 
 **New in this version:** KFIRE now records your Hearthstone matches. The game
