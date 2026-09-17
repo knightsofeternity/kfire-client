@@ -1,6 +1,6 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
-  import { listen } from "@tauri-apps/api/event";
+  import { listen, TauriEvent } from "@tauri-apps/api/event";
   import { getVersion } from "@tauri-apps/api/app";
   import { openUrl } from "@tauri-apps/plugin-opener";
   import { onMount } from "svelte";
@@ -67,6 +67,52 @@
     }
   }
 
+  type RlStatus = {
+    supported: boolean;
+    enabled: boolean;
+    config_path: string;
+    config_block: string;
+    install_dir: string | null;
+    player_name: string;
+    last_mismatch: string;
+  };
+
+  let rl = $state<RlStatus | null>(null);
+  let rlBusy = $state(false);
+  let rlError = $state("");
+  let rlName = $state("");
+
+  async function loadRl() {
+    try {
+      rl = await invoke<RlStatus>("rl_status");
+      rlName = rl.player_name;
+    } catch {
+      rl = null;
+    }
+  }
+
+  async function saveRlName() {
+    try {
+      await invoke("rl_set_player_name", { name: rlName });
+      await loadRl();
+    } catch (e) {
+      rlError = String(e);
+    }
+  }
+
+  async function toggleRl(next: boolean) {
+    rlBusy = true;
+    rlError = "";
+    try {
+      await invoke("rl_set_enabled", { enabled: next });
+      await loadRl();
+    } catch (e) {
+      rlError = String(e);
+    } finally {
+      rlBusy = false;
+    }
+  }
+
   type UpdateInfo = {
     current: string;
     latest: string | null;
@@ -121,6 +167,23 @@
     // Drop status entries for servers that no longer exist.
     const ids = new Set(servers.map((x) => x.id));
     for (const id of Object.keys(statuses)) if (!ids.has(id)) delete statuses[id];
+
+    await pollRlMismatch();
+  }
+
+  // Le seul champ Rocket League qui change sans que le membre ait rien fait :
+  // on le sonde à part plutôt que de rappeler rl_status, qui peut énumérer
+  // les processus de la machine pour trouver l'installation. Rappelé par
+  // l'intervalle existant ET quand la fenêtre reprend le focus, puisque
+  // c'est exactement l'instant où le membre regarde l'écran.
+  async function pollRlMismatch() {
+    if (rl) {
+      try {
+        rl.last_mismatch = await invoke<string>("rl_last_mismatch");
+      } catch {
+        // Le reste de l'écran RL reste inchangé si l'appel échoue.
+      }
+    }
   }
 
   function statusOf(id: string): { status: ServerStatus; detail: string } {
@@ -139,6 +202,7 @@
     refreshState();
     checkForUpdate();
     loadHs();
+    loadRl();
     const interval = setInterval(refreshState, 4000);
     const unsubs = [
       listen<StatusEvent>("kfire://status", (e) => {
@@ -166,6 +230,9 @@
         }
       }),
       listen("kfire://detection", () => refreshState()),
+      // Le moment où il regarde vraiment l'écran : plus fiable qu'un minuteur
+      // qu'une fenêtre mise en arrière-plan pourrait voir ralentir.
+      listen(TauriEvent.WINDOW_FOCUS, () => pollRlMismatch()),
     ];
     return () => {
       clearInterval(interval);
@@ -369,6 +436,73 @@
           </p>
         {/if}
       {/if}
+
+      {#if rl}
+        <h2>Suivi des parties Rocket League</h2>
+
+        <label>
+          <span>Votre pseudo Rocket League (celui affiché en jeu)</span>
+          <input
+            type="text"
+            bind:value={rlName}
+            onblur={saveRlName}
+            placeholder="Le pseudo exact affiché en jeu"
+          />
+        </label>
+        <p class="muted small">
+          Ce pseudo ne quitte jamais cet ordinateur : il sert uniquement à retrouver votre
+          ligne dans la feuille de match, jamais envoyé au serveur.
+        </p>
+
+        {#if rl.last_mismatch}
+          <p class="warning" role="status">
+            Votre dernier match n'a correspondu à personne. Le jeu a vu ces pseudos :
+            {rl.last_mismatch}. L'un d'eux est le vôtre : copiez-le exactement dans le champ
+            ci-dessus.
+          </p>
+        {/if}
+
+        {#if !rl.install_dir}
+          <p class="muted small">
+            Dossier d'installation introuvable. Lancez Rocket League une fois, puis rouvrez cet
+            écran.
+          </p>
+        {:else if rl.enabled}
+          <p class="muted">
+            Le suivi est actif. KFIRE lit la socket de statistiques du jeu et n'envoie que le
+            résumé du match : mode, score, buts, passes, arrêts, tirs, démos et durée. Les
+            pseudos des autres joueurs, coéquipiers comme adversaires, ne quittent jamais cet
+            ordinateur.
+          </p>
+          <button class="secondary" disabled={rlBusy} onclick={() => toggleRl(false)}>
+            Désactiver et retirer le fichier
+          </button>
+        {:else}
+          <p class="muted">
+            Rocket League n'ouvre sa socket de statistiques que si ce fichier existe. KFIRE va
+            l'écrire ici :
+          </p>
+          <pre class="hs-pre">{rl.config_path}</pre>
+          <p class="muted">avec exactement ce contenu :</p>
+          <pre class="hs-pre">{rl.config_block}</pre>
+          <p class="muted">
+            Seul le résumé du match sera envoyé : mode, score, buts, passes, arrêts, tirs,
+            démos et durée. Les pseudos des autres joueurs ne quittent jamais cet ordinateur.
+          </p>
+          <button disabled={rlBusy || !rlName.trim()} onclick={() => toggleRl(true)}>
+            Activer le suivi
+          </button>
+        {/if}
+
+        <p class="muted small">
+          Rocket League ne lit ce fichier qu'à son démarrage : activer le suivi pendant une
+          partie ne prendra effet qu'au prochain lancement du jeu.
+        </p>
+
+        {#if rlError}
+          <p class="error" role="alert">{rlError}</p>
+        {/if}
+      {/if}
     </section>
   {/if}
 
@@ -439,6 +573,7 @@
   .muted { color: #6b7280; font-size: 0.85rem; margin: 0; }
   .muted.small { font-size: 0.75rem; }
   .error { color: #ef4444; font-size: 0.85rem; margin: 0; }
+  .warning { color: #f59e0b; font-size: 0.85rem; margin: 0; }
   .toggle { flex-direction: row; align-items: center; gap: 0.5rem; cursor: pointer; color: #9ca3af; font-size: 0.85rem; margin-top: 0.4rem; }
   .toggle input { accent-color: #f97316; width: 1rem; height: 1rem; cursor: pointer; }
   footer { margin-top: auto; display: flex; flex-direction: column; gap: 0.3rem; }

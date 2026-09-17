@@ -168,6 +168,7 @@ async fn full_presence_pipeline() {
         notifications: notif_tx,
         access_tokens: Arc::new(std::sync::Mutex::new(HashMap::new())),
         shutdown: stop_rx,
+        live: watch::channel(None).1,
     };
     let task_handle = tokio::spawn(task.run());
 

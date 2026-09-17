@@ -62,6 +62,11 @@ pub struct WsTask {
     pub access_tokens: Arc<Mutex<HashMap<String, String>>>,
     /// Flips to true when this server's session ends (unlink).
     pub shutdown: watch::Receiver<bool>,
+    /// Le dernier état de match en direct, à diffuser si la connexion est là.
+    ///
+    /// Un `watch` et non la file locale : le direct n'est JAMAIS mis en file ni
+    /// rejoué. Sans connexion, l'état est perdu, et le suivant le remplace.
+    pub live: watch::Receiver<Option<String>>,
 }
 
 impl WsTask {
@@ -239,6 +244,16 @@ impl WsTask {
                 _ = self.queue_notify.notified() => {
                     if let Err(e) = self.drain_queue(&mut stream).await {
                         return ServeEnd::Dropped(e);
+                    }
+                }
+                _ = self.live.changed() => {
+                    // borrow_and_update marque la valeur comme vue : sans cela
+                    // la branche se redéclencherait aussitôt, en boucle.
+                    let msg = self.live.borrow_and_update().clone();
+                    if let Some(msg) = msg {
+                        if stream.send(Message::Text(msg.into())).await.is_err() {
+                            return ServeEnd::Dropped("live match send failed".into());
+                        }
                     }
                 }
                 _ = heartbeat.tick() => {
