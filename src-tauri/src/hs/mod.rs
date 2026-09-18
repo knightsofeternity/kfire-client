@@ -10,6 +10,11 @@ pub mod parser;
 pub mod paths;
 pub mod watcher;
 
+use serde_json::{json, Value};
+
+/// The catalogue slug, the one the server knows this game by.
+pub const SLUG: &str = "hearthstone";
+
 /// The instant a local wall-clock time really happened.
 ///
 /// The game's log writes LOCAL time and no zone. Sending it as if it were UTC
@@ -57,8 +62,42 @@ pub fn payload(
     serde_json::Value::Object(o)
 }
 
+/// The state broadcast while a match is played, and nothing else.
+///
+/// Never queued, never replayed, never written down. The log it comes from
+/// holds the member's BattleTag, the opponent's name and every card played;
+/// none of that has any business being sent to the whole guild, and the fact
+/// that this message is not stored would not make it acceptable.
+pub fn live_payload(l: &parser::Live, slug: &str) -> Value {
+    let mut o = serde_json::Map::new();
+    o.insert("game_slug".into(), slug.into());
+    o.insert("mode".into(), l.mode.clone().into());
+    o.insert("turn".into(), l.turn.into());
+    // Omitted, never null: there is no ranking in constructed, and the server
+    // refuses a constructed match that carries one.
+    if let Some(p) = l.placement {
+        o.insert("placement".into(), p.into());
+    }
+    Value::Object(o)
+}
+
+/// The end of a match, broadcast so the card disappears at once.
+///
+/// Without it the portal only learns a match is over when its own timer expires
+/// the state, so a finished match would sit on the guild's live page for
+/// seconds after the last turn. Sending `None` on the channel does NOT do this:
+/// the consumer skips `None`, so it transmits nothing at all.
+///
+/// The server understands this shape generically, for every game.
+pub fn ended_payload(slug: &str) -> Value {
+    json!({ "game_slug": slug, "ended": true })
+}
+
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+
+/// How often at most the live state is published.
+const LIVE_EVERY: std::time::Duration = std::time::Duration::from_millis(500);
 
 /// Set while no watcher thread should be running. A single flag is enough: the
 /// game runs at most once, and the scanner never reports two starts without a
@@ -66,7 +105,11 @@ use std::sync::Arc;
 static STOP: AtomicBool = AtomicBool::new(true);
 
 /// Starts following the log, unless the member has not enabled tracking.
-pub fn start_watching(db: Arc<crate::db::Db>, notify: Arc<tokio::sync::Notify>) {
+pub fn start_watching(
+    db: Arc<crate::db::Db>,
+    notify: Arc<tokio::sync::Notify>,
+    live: tokio::sync::watch::Sender<Option<String>>,
+) {
     if db.get_setting("hs_enabled").as_deref() != Some("1") {
         return;
     }
@@ -79,37 +122,76 @@ pub fn start_watching(db: Arc<crate::db::Db>, notify: Arc<tokio::sync::Notify>) 
         return; // already running
     }
     std::thread::spawn(move || {
-        watcher::follow(&install, &STOP, |m, start| {
-            let played_at = m.played_at(start);
-            let servers: Vec<(String, String)> = db
-                .list_servers()
-                .into_iter()
-                .map(|s| (s.id, s.status_override))
-                .collect();
-            let catalog: Vec<(String, String)> = db
-                .load_games()
-                .into_iter()
-                .map(|(id, g)| (id, g.slug))
-                .collect();
-            let global = db.get_setting("global_status").unwrap_or_default();
-            let targets = targets(&servers, &catalog, &global, "hearthstone");
-            for id in &targets {
-                let p = payload(&m, "hearthstone", played_at);
-                db.queue_event(
-                    id,
-                    "match_result",
-                    "hearthstone",
-                    &to_utc(played_at).to_rfc3339(),
-                    Some(&p.to_string()),
-                );
-            }
-            if targets.is_empty() {
-                log::info!("hs: a {} went unreported, no eligible server", m.result);
+        // Shared by both callbacks, which is why it holds its state behind a
+        // RefCell: two closures cannot each borrow the same `mut` variable.
+        // Keeping the memory of what was last sent in ONE place is what makes
+        // "only when it changed" hold across both the live state and the end
+        // of a match.
+        let last_sent = std::cell::RefCell::new(None::<String>);
+        let broadcast = |payload: serde_json::Value| {
+            let raw = payload.to_string();
+            if last_sent.borrow().as_deref() == Some(raw.as_str()) {
                 return;
             }
-            notify.notify_one();
-            log::info!("hs: queued a {} in {}", m.result, m.mode);
-        });
+            *last_sent.borrow_mut() = Some(raw);
+            let env = json!({
+                "type": "live_match",
+                "ts": chrono::Utc::now().to_rfc3339(),
+                "payload": payload,
+            });
+            let _ = live.send(Some(env.to_string()));
+        };
+        let mut last_live = std::time::Instant::now() - LIVE_EVERY;
+
+        watcher::follow(
+            &install,
+            &STOP,
+            |m, start| {
+                // Tell the portal the match is over instead of letting its
+                // timer work it out, so the card goes away at once.
+                broadcast(ended_payload(SLUG));
+                let played_at = m.played_at(start);
+                let servers: Vec<(String, String)> = db
+                    .list_servers()
+                    .into_iter()
+                    .map(|s| (s.id, s.status_override))
+                    .collect();
+                let catalog: Vec<(String, String)> = db
+                    .load_games()
+                    .into_iter()
+                    .map(|(id, g)| (id, g.slug))
+                    .collect();
+                let global = db.get_setting("global_status").unwrap_or_default();
+                let targets = targets(&servers, &catalog, &global, SLUG);
+                for id in &targets {
+                    let p = payload(&m, SLUG, played_at);
+                    db.queue_event(
+                        id,
+                        "match_result",
+                        SLUG,
+                        &to_utc(played_at).to_rfc3339(),
+                        Some(&p.to_string()),
+                    );
+                }
+                if targets.is_empty() {
+                    log::info!("hs: a {} went unreported, no eligible server", m.result);
+                    return;
+                }
+                notify.notify_one();
+                log::info!("hs: queued a {} in {}", m.result, m.mode);
+            },
+            |state| {
+                // Spaced out, and only when something changed: the log is
+                // re-read on a timer, so most passes see the very same state.
+                if last_live.elapsed() < LIVE_EVERY {
+                    return;
+                }
+                last_live = std::time::Instant::now();
+                if let Some(l) = state {
+                    broadcast(live_payload(&l, SLUG));
+                }
+            },
+        );
         STOP.store(true, Ordering::SeqCst);
     });
 }
@@ -215,6 +297,56 @@ mod tests {
         assert!(v.get("placement").is_none());
         assert!(v.get("turns").is_none());
         assert!(v.get("hero_card_id").is_none());
+    }
+
+    #[test]
+    fn le_direct_ne_porte_exactement_que_les_quatre_champs_autorises() {
+        // THE test of this module: it pins the exact list of keys that leave
+        // this machine towards every member of the guild. The log this comes
+        // from holds the member's BattleTag, the opponent's name and every card
+        // played; if this list ever grows, it grows on purpose.
+        let l = parser::Live {
+            mode: "battlegrounds".into(),
+            turn: 11,
+            placement: Some(4),
+        };
+        let v = live_payload(&l, SLUG);
+        let o = v.as_object().unwrap();
+        let mut keys: Vec<&str> = o.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(keys, vec!["game_slug", "mode", "placement", "turn"]);
+        assert_eq!(o["game_slug"], SLUG);
+        assert_eq!(o["mode"], "battlegrounds");
+        assert_eq!(o["turn"], 11);
+        assert_eq!(o["placement"], 4);
+    }
+
+    #[test]
+    fn le_direct_en_mode_construit_nemet_aucune_position() {
+        // There is no ranking in constructed, and the server refuses a
+        // constructed match carrying one.
+        let l = parser::Live {
+            mode: "constructed".into(),
+            turn: 7,
+            placement: None,
+        };
+        let v = live_payload(&l, SLUG);
+        let o = v.as_object().unwrap();
+        let mut keys: Vec<&str> = o.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(keys, vec!["game_slug", "mode", "turn"]);
+        assert!(!v.to_string().contains("placement"));
+    }
+
+    #[test]
+    fn la_fin_dune_partie_ne_porte_que_le_jeu_et_le_drapeau() {
+        let v = ended_payload(SLUG);
+        let o = v.as_object().unwrap();
+        let mut keys: Vec<&str> = o.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(keys, vec!["ended", "game_slug"]);
+        assert_eq!(o["game_slug"], SLUG);
+        assert_eq!(o["ended"], true);
     }
 
     #[test]
