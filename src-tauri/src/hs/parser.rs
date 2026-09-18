@@ -38,6 +38,19 @@ impl Match {
     }
 }
 
+/// The state of a match still being played: a mode and two numbers.
+///
+/// Deliberately NOT a `Match`: this is broadcast to the whole guild several
+/// times a minute, so it carries the strict minimum a card can display, and it
+/// has no field a name could ever land in.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Live {
+    pub mode: String,
+    /// The turn being played; 0 until the game has announced one.
+    pub turn: i64,
+    pub placement: Option<i64>,
+}
+
 /// State accumulated while reading one game.
 #[derive(Default)]
 struct Game {
@@ -104,6 +117,30 @@ impl Parser {
             }
         }
         out
+    }
+
+    /// The match being played right now, if there is one.
+    ///
+    /// Nothing is read again here: the fields already exist because `finish`
+    /// needs them, and this only exposes the three the live card shows.
+    ///
+    /// `None` once the match has been emitted, because its card must give way
+    /// to the end-of-match message rather than freeze on a final state.
+    pub fn live(&self) -> Option<Live> {
+        let g = self.cur.as_ref()?;
+        if g.emitted {
+            return None;
+        }
+        // Without a mode there is nothing to display, and the mode decides
+        // whether a placement means anything at all.
+        let mode = g.mode.clone()?;
+        Some(Live {
+            turn: g.turns.unwrap_or(0),
+            // Constructed has no leaderboard, so a placement read there can
+            // only be noise; the server refuses a constructed match with one.
+            placement: (mode == "battlegrounds").then_some(g.placement).flatten(),
+            mode,
+        })
     }
 }
 
@@ -391,6 +428,81 @@ D 17:44:59.4684646 GameState.DebugPrintPower() - TAG_CHANGE Entity=TestPlayer#12
             m.played_at(start).format("%Y-%m-%d %H:%M:%S").to_string(),
             "2026-08-03 00:14:59"
         );
+    }
+
+    /// The lines of a game up to, but not including, the first one holding
+    /// `marker`: what the log already holds while the match is still running.
+    fn until<'a>(src: &'a str, marker: &str) -> Vec<&'a str> {
+        src.lines().take_while(|l| !l.contains(marker)).collect()
+    }
+
+    #[test]
+    fn une_partie_en_cours_rend_un_etat() {
+        let mut p = Parser::new();
+        assert!(p
+            .push(until(BG_GAME, "tag=PLAYSTATE").into_iter())
+            .is_empty());
+        let l = p.live().expect("une partie en cours");
+        assert_eq!(l.mode, "battlegrounds");
+        assert_eq!(l.turn, 22);
+        assert_eq!(l.placement, Some(5));
+    }
+
+    #[test]
+    fn une_partie_terminee_et_emise_ne_rend_plus_detat() {
+        let mut p = Parser::new();
+        assert_eq!(p.push(BG_GAME.lines()).len(), 1);
+        assert_eq!(p.live(), None);
+    }
+
+    #[test]
+    fn une_partie_sans_mode_connu_ne_rend_pas_detat() {
+        // The game type arrives a few lines after the game opens; until then
+        // there is nothing a card could display.
+        let mut p = Parser::new();
+        p.push(until(BG_GAME, "GameType=").into_iter());
+        assert_eq!(p.live(), None);
+    }
+
+    #[test]
+    fn le_tour_remonte_est_le_tour_en_cours() {
+        // The same GameEntity line as the real log, with its time and turn
+        // moved back: this is what the log holds halfway through the match.
+        let mut p = Parser::new();
+        p.push(until(BG_GAME, "tag=TURN value=22").into_iter());
+        p.push(std::iter::once(
+            "D 17:35:00.0000000 GameState.DebugPrintPower() -     TAG_CHANGE Entity=GameEntity tag=TURN value=11",
+        ));
+        assert_eq!(p.live().expect("une partie en cours").turn, 11);
+
+        // And it follows the match forward.
+        p.push(until(BG_GAME, "tag=PLAYSTATE").into_iter());
+        assert_eq!(p.live().expect("une partie en cours").turn, 22);
+    }
+
+    #[test]
+    fn en_mode_construit_aucune_position_nest_remontee() {
+        // Constructed has no leaderboard. Even when the log carries such a
+        // line, the live state must not claim a placement: the server refuses
+        // a constructed match that has one.
+        let src = BG_GAME.replace("GT_BATTLEGROUNDS", "GT_RANKED");
+        let mut p = Parser::new();
+        p.push(until(&src, "tag=PLAYSTATE").into_iter());
+        let l = p.live().expect("une partie en cours");
+        assert_eq!(l.mode, "constructed");
+        assert_eq!(l.placement, None);
+    }
+
+    #[test]
+    fn letat_en_direct_ne_porte_aucun_nom() {
+        // Same rule as the summary: the log holds the member's BattleTag, the
+        // opponent's name and every card.
+        let mut p = Parser::new();
+        p.push(until(BG_GAME, "tag=PLAYSTATE").into_iter());
+        let debug = format!("{:?}", p.live().expect("une partie en cours"));
+        for forbidden in ["TestPlayer", "Adversaire", "Herosnom", "#1234", "BG28"] {
+            assert!(!debug.contains(forbidden), "leaked {forbidden} in {debug}");
+        }
     }
 
     #[test]
