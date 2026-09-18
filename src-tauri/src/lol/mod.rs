@@ -9,6 +9,7 @@
 //! Seuls des faits sur le membre sortent, et la liste exacte est épinglée par
 //! un test.
 
+pub mod api;
 pub mod parser;
 
 use serde_json::{json, Value};
@@ -44,6 +45,127 @@ pub fn live_payload(l: &parser::Live, slug: &str) -> Value {
 /// guilde. Le serveur comprend cette forme génériquement, pour tous les jeux.
 pub fn ended_payload(slug: &str) -> Value {
     json!({ "game_slug": slug, "ended": true })
+}
+
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+
+/// À quelle cadence au plus l'état du direct est publié.
+///
+/// C'est aussi la cadence de sondage de l'API : chaque publication coûte une
+/// requête HTTP au jeu, et rien dans la charge utile ne bouge plus vite qu'une
+/// seconde (le temps de jeu est en secondes, l'or et les scores changent moins
+/// souvent que ça).
+const LIVE_EVERY: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// Vrai tant qu'aucun fil de suivi ne doit tourner. Un seul drapeau suffit : le
+/// jeu tourne au plus une fois, et le scanner ne signale jamais deux démarrages
+/// sans un arrêt entre les deux.
+static STOP: AtomicBool = AtomicBool::new(true);
+
+/// Si un fil de suivi tourne en ce moment.
+pub fn is_watching() -> bool {
+    !STOP.load(Ordering::SeqCst)
+}
+
+/// Demande au fil de suivi de s'arrêter.
+pub fn stop_watching() {
+    STOP.store(true, Ordering::SeqCst);
+}
+
+/// Commence à sonder l'API locale, sauf si le membre n'a pas activé le suivi.
+///
+/// Contrairement à Rocket League, aucun pseudo n'est demandé : `activePlayer`
+/// dit qui est le joueur local, donc le membre n'a rien à saisir et rien à se
+/// tromper.
+pub fn start_watching(db: Arc<crate::db::Db>, live: tokio::sync::watch::Sender<Option<String>>) {
+    if db.get_setting("lol_enabled").as_deref() != Some("1") {
+        log::info!("lol: tracking is off in the settings, not watching");
+        return;
+    }
+    // swap rend la valeur PRÉCÉDENTE : true veut dire qu'on était arrêté, donc
+    // on démarre.
+    if !STOP.swap(false, Ordering::SeqCst) {
+        return; // déjà en train de tourner
+    }
+    let Some(client) = api::client() else {
+        STOP.store(true, Ordering::SeqCst);
+        return;
+    };
+    log::info!("lol: watching for the game's live API on {}", api::BASE);
+
+    // Une tâche asynchrone, contrairement aux fils bloquants de Hearthstone et
+    // Rocket League : ici on parle HTTP, et le client HTTP du projet est
+    // asynchrone.
+    tauri::async_runtime::spawn(async move {
+        let mut last_sent: Option<String> = None;
+        // Vrai dès qu'une partie a été vue, pour ne pas annoncer une fin qui
+        // n'a jamais eu de début (le jeu tourne depuis le menu, où l'API
+        // n'existe pas).
+        let mut in_game = false;
+
+        // Garde en UN seul endroit la mémoire de ce qui a été envoyé, ce qui
+        // est ce qui fait tenir le « seulement si ça a changé » aussi bien pour
+        // l'état du direct que pour la fin de la partie.
+        let broadcast = |payload: Value, last_sent: &mut Option<String>| {
+            let raw = payload.to_string();
+            // Le jeu est sondé sur un minuteur, donc la plupart des passages
+            // voient exactement le même état.
+            if last_sent.as_deref() == Some(raw.as_str()) {
+                return;
+            }
+            *last_sent = Some(raw);
+            let env = json!({
+                "type": "live_match",
+                "ts": chrono::Utc::now().to_rfc3339(),
+                "payload": payload,
+            });
+            let _ = live.send(Some(env.to_string()));
+        };
+
+        while !STOP.load(Ordering::SeqCst) {
+            match api::fetch_all_game_data(&client).await {
+                Some(raw) => match parser::parse(&raw) {
+                    Some(l) => {
+                        in_game = true;
+                        broadcast(live_payload(&l, SLUG), &mut last_sent);
+                    }
+                    // La forme attendue n'y est pas encore : l'API répond dès
+                    // l'écran de chargement, avant que la liste des joueurs
+                    // soit remplie. Rien à signaler.
+                    None => log::debug!("lol: the live API answered without a usable game state"),
+                },
+                None => {
+                    if in_game {
+                        // L'API a disparu : la partie est finie. On le dit tout
+                        // de suite plutôt que de laisser le minuteur du serveur
+                        // s'en apercevoir.
+                        broadcast(ended_payload(SLUG), &mut last_sent);
+                        in_game = false;
+                        log::info!("lol: the live API is gone, the game is over");
+                    }
+                }
+            }
+            sleep_until_stopped(LIVE_EVERY).await;
+        }
+        STOP.store(true, Ordering::SeqCst);
+    });
+}
+
+/// Attend, en revenant tout de suite si on nous demande de nous arrêter.
+///
+/// Découpé en petits pas pour que quitter le jeu, ou couper le suivi dans les
+/// réglages, arrête la boucle sans attendre le sondage suivant.
+async fn sleep_until_stopped(total: std::time::Duration) {
+    let step = std::time::Duration::from_millis(100);
+    let mut slept = std::time::Duration::ZERO;
+    while slept < total {
+        if STOP.load(Ordering::SeqCst) {
+            return;
+        }
+        tokio::time::sleep(step).await;
+        slept += step;
+    }
 }
 
 #[cfg(test)]

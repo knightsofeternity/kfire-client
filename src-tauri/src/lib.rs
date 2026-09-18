@@ -587,6 +587,36 @@ fn rl_live(state: tauri::State<'_, AppState>) -> RlLive {
     }
 }
 
+#[derive(serde::Serialize)]
+struct LolStatus {
+    enabled: bool,
+    /// Si un fil de suivi tourne en ce moment.
+    watching: bool,
+}
+
+/// L'état du suivi League of Legends.
+///
+/// Aucun pseudo, aucun dossier d'installation, aucun fichier de configuration à
+/// écrire : le jeu ouvre son API tout seul pendant une partie, et elle dit
+/// elle-même qui est le joueur local.
+#[tauri::command]
+fn lol_status(state: tauri::State<'_, AppState>) -> LolStatus {
+    LolStatus {
+        enabled: state.db.get_setting("lol_enabled").as_deref() == Some("1"),
+        watching: crate::lol::is_watching(),
+    }
+}
+
+#[tauri::command]
+fn lol_set_enabled(state: tauri::State<'_, AppState>, enabled: bool) {
+    state
+        .db
+        .set_setting("lol_enabled", if enabled { "1" } else { "0" });
+    if !enabled {
+        crate::lol::stop_watching();
+    }
+}
+
 /// Sets the global status and re-applies it to every server that inherits it.
 #[tauri::command]
 fn set_global_status(
@@ -870,6 +900,8 @@ pub fn run() {
             rl_set_install_dir,
             rl_set_player_name,
             rl_live,
+            lol_status,
+            lol_set_enabled,
             update::check_for_update
         ])
         .setup(|app| {
@@ -973,6 +1005,16 @@ pub fn run() {
                             );
                         } else {
                             crate::rl::stop_watching();
+                        }
+                    }
+                    // League of Legends ouvre une API locale, qui n'existe que
+                    // pendant une partie. Rien n'est mis en file : ce module ne
+                    // diffuse que du direct, donc il ne reçoit pas `notify`.
+                    if ev.game_slug == crate::lol::SLUG {
+                        if ev.started {
+                            crate::lol::start_watching(queue_db.clone(), live_tx.clone());
+                        } else {
+                            crate::lol::stop_watching();
                         }
                     }
                     let _ = running_handle.emit("kfire://detection", event_type);
