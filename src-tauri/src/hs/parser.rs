@@ -134,8 +134,14 @@ impl Parser {
         // Without a mode there is nothing to display, and the mode decides
         // whether a placement means anything at all.
         let mode = g.mode.clone()?;
+        // Nor without a turn. The game announces one within seconds of the
+        // first mulligan, so this only skips the very start; reporting turn 0
+        // meanwhile would be rejected by the server, which refuses anything
+        // below the first turn, and every one of those refusals would come
+        // back to this client as an error it can do nothing about.
+        let turn = g.turns?;
         Some(Live {
-            turn: g.turns.unwrap_or(0),
+            turn,
             // Constructed has no leaderboard, so a placement read there can
             // only be noise; the server refuses a constructed match with one.
             placement: (mode == "battlegrounds").then_some(g.placement).flatten(),
@@ -491,6 +497,24 @@ D 17:44:59.4684646 GameState.DebugPrintPower() - TAG_CHANGE Entity=TestPlayer#12
         let l = p.live().expect("une partie en cours");
         assert_eq!(l.mode, "constructed");
         assert_eq!(l.placement, None);
+    }
+
+    #[test]
+    fn une_partie_sans_tour_connu_nemet_aucun_etat() {
+        // Le serveur refuse tout tour inferieur a 1, et chacun de ces refus
+        // reviendrait au client sous forme d'erreur. Tant que le jeu n'a pas
+        // annonce de tour, il n'y a rien a montrer.
+        let mut g = Game {
+            mode: Some("battlegrounds".to_string()),
+            ..Default::default()
+        };
+        g.turns = None;
+        let mut p = Parser::new();
+        p.cur = Some(g);
+        assert!(p.live().is_none());
+
+        p.cur.as_mut().unwrap().turns = Some(1);
+        assert_eq!(p.live().map(|l| l.turn), Some(1));
     }
 
     #[test]
