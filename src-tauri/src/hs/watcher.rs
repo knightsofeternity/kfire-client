@@ -58,16 +58,23 @@ fn newest_log(install: &Path) -> Option<(PathBuf, chrono::NaiveDateTime)> {
     Some((logs.join(&newest).join("Power.log"), start))
 }
 
-/// Follows the log until `stop` is set, handing every finished match to `emit`.
+/// Follows the log until `stop` is set, handing every finished match to `emit`
+/// and the state of the match in progress to `live`.
+///
+/// Two separate callbacks rather than one taking both: they answer to different
+/// rhythms. `emit` fires only when a match ends, while `live` fires on EVERY
+/// pass, including the many where the log said nothing new, because the caller
+/// decides on its own whether that state is worth sending. A single callback
+/// would have had to be called with an empty match on most passes.
 ///
 /// Failure is SILENT by design: an unreadable or unrecognised log leaves a
 /// trace in our own logs and nothing else. Alarming the member over a possibly
 /// transient game patch would be worse than saying nothing.
-pub fn follow<F: FnMut(parser::Match, chrono::NaiveDateTime)>(
-    install: &Path,
-    stop: &std::sync::atomic::AtomicBool,
-    mut emit: F,
-) {
+pub fn follow<F, L>(install: &Path, stop: &std::sync::atomic::AtomicBool, mut emit: F, mut live: L)
+where
+    F: FnMut(parser::Match, chrono::NaiveDateTime),
+    L: FnMut(Option<parser::Live>),
+{
     use std::sync::atomic::Ordering;
 
     let mut current: Option<PathBuf> = None;
@@ -93,6 +100,10 @@ pub fn follow<F: FnMut(parser::Match, chrono::NaiveDateTime)>(
                 }
             }
         }
+        // Outside the "fresh lines" branch on purpose: the game appends
+        // nothing for seconds at a time, and the portal would stop hearing
+        // about a match still being played.
+        live(parser.live());
         std::thread::sleep(POLL);
     }
 }

@@ -950,9 +950,13 @@ pub fn run() {
                     }
                     // Hearthstone reports its matches by log reading, which
                     // only makes sense while the game is running.
-                    if ev.game_slug == "hearthstone" {
+                    if ev.game_slug == crate::hs::SLUG {
                         if ev.started {
-                            crate::hs::start_watching(queue_db.clone(), queue_notify.clone());
+                            crate::hs::start_watching(
+                                queue_db.clone(),
+                                queue_notify.clone(),
+                                live_tx.clone(),
+                            );
                         } else {
                             crate::hs::stop_watching();
                         }
