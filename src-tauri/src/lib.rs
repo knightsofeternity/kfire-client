@@ -1,6 +1,7 @@
 pub mod api;
 pub mod db;
 pub mod hs;
+pub mod lol;
 pub mod rl;
 pub mod scanner;
 pub mod status;
