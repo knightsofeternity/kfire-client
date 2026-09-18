@@ -48,6 +48,19 @@ pub fn payload(s: &parser::Summary, slug: &str, played_at: chrono::DateTime<chro
     Value::Object(o)
 }
 
+/// The end of a match, broadcast so the card disappears at once.
+///
+/// Without it the portal only learns a match is over when the server's timer
+/// expires the state, so a frozen score sits on the whole guild's live page
+/// for up to fifteen seconds after the match ended. Sending `None` on the
+/// channel does NOT do this: the consumer skips `None`, so it transmits
+/// nothing at all.
+///
+/// The server understands this shape generically, for every game.
+pub fn ended_payload(slug: &str) -> Value {
+    json!({ "game_slug": slug, "ended": true })
+}
+
 /// L'état diffusé pendant le match, et rien d'autre.
 ///
 /// Jamais mis en file, jamais rejoué, jamais écrit. Il ne nomme personne : le
@@ -220,7 +233,15 @@ pub fn start_watching(
             }
             socket::Event::Close => {
                 gate.closed();
-                let _ = live.send(None);
+                // Tell the portal the match is over instead of letting its
+                // timer work it out: a frozen score would otherwise stay on
+                // the guild's live page for seconds after the final whistle.
+                let env = serde_json::json!({
+                    "type": "live_match",
+                    "ts": chrono::Utc::now().to_rfc3339(),
+                    "payload": ended_payload(SLUG),
+                });
+                let _ = live.send(Some(env.to_string()));
                 let Some(m) = current.take() else { return };
 
                 // Le même GUID deux fois veut dire que le jeu a renvoyé la fin
@@ -331,6 +352,19 @@ pub fn start_watching(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn la_fin_dun_match_ne_porte_que_le_jeu_et_le_drapeau() {
+        // Ce message part vers tous les membres de la guilde : il ne doit rien
+        // porter d'autre, et surtout aucun reliquat du match qui vient de finir.
+        let p = ended_payload(SLUG);
+        let o = p.as_object().expect("un objet");
+        let mut keys: Vec<&str> = o.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(keys, vec!["ended", "game_slug"]);
+        assert_eq!(o["game_slug"], SLUG);
+        assert_eq!(o["ended"], true);
+    }
     use crate::rl::parser::Summary;
 
     fn a_summary() -> Summary {
