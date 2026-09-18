@@ -8,6 +8,7 @@
 
 pub mod config;
 pub mod frames;
+pub mod gate;
 pub mod parser;
 pub mod paths;
 pub mod socket;
@@ -179,9 +180,13 @@ pub fn start_watching(
         let mut started_at = std::time::Instant::now();
         let mut last_live = std::time::Instant::now() - LIVE_EVERY;
         let mut last_guid: Option<String> = None;
+        // Keeps the end-of-match frames from building a second, ghost match.
+        // See `gate.rs`.
+        let mut gate = gate::MatchGate::new();
 
         socket::follow(port, &STOP, |ev| match ev {
             socket::Event::Open => {
+                gate.opened();
                 if current.is_none() {
                     // Lu à chaque match, pas une fois par lancement du jeu : un
                     // pseudo corrigé pendant la partie s'applique au match
@@ -192,6 +197,9 @@ pub fn start_watching(
                 }
             }
             socket::Event::State(data) => {
+                if current.is_none() && !gate.may_start() {
+                    return;
+                }
                 let m = current.get_or_insert_with(|| {
                     started_at = std::time::Instant::now();
                     let name = db.get_setting("rl_player_name").unwrap_or_default();
@@ -211,6 +219,7 @@ pub fn start_watching(
                 }
             }
             socket::Event::Close => {
+                gate.closed();
                 let _ = live.send(None);
                 let Some(m) = current.take() else { return };
 
