@@ -124,6 +124,13 @@ fn read_until_closed(mut stream: TcpStream, stop: &AtomicBool, on: &mut impl FnM
             match name.as_str() {
                 n if OPENS.contains(&n) => on(Event::Open),
                 "UpdateState" => on(Event::State(data)),
+                // BOTH of these end a match, and the game sends both: MatchEnded
+                // when the match is over, then MatchDestroyed on the way back to
+                // the menu. Between the two it keeps sending UpdateState frames
+                // for the end-of-match screen, which is how this client once built
+                // phantom matches out of them -- see `gate.rs`. Removing either one
+                // is not safe: when the first is missing, the second is the only
+                // end we will ever get.
                 "MatchDestroyed" | "MatchEnded" => on(Event::Close),
                 _ => {
                     // An event name we do not handle. Logged ONCE for each of
