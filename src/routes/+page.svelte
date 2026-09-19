@@ -67,6 +67,33 @@
     }
   }
 
+  type LolStatus = { enabled: boolean; watching: boolean };
+
+  let lol = $state<LolStatus | null>(null);
+  let lolBusy = $state(false);
+  let lolError = $state("");
+
+  async function loadLol() {
+    try {
+      lol = await invoke<LolStatus>("lol_status");
+    } catch {
+      lol = null;
+    }
+  }
+
+  async function toggleLol(next: boolean) {
+    lolBusy = true;
+    lolError = "";
+    try {
+      await invoke("lol_set_enabled", { enabled: next });
+      await loadLol();
+    } catch (e) {
+      lolError = String(e);
+    } finally {
+      lolBusy = false;
+    }
+  }
+
   type RlStatus = {
     supported: boolean;
     enabled: boolean;
@@ -226,6 +253,7 @@
     checkForUpdate();
     loadHs();
     loadRl();
+    loadLol();
     const interval = setInterval(refreshState, 4000);
     const unsubs = [
       listen<StatusEvent>("kfire://status", (e) => {
@@ -543,6 +571,41 @@
         {#if rlError}
           <p class="error" role="alert">{rlError}</p>
         {/if}
+      {/if}
+
+      <h2>Suivi des parties League of Legends</h2>
+
+      {#if lol?.enabled}
+        <p class="muted">
+          Le suivi est actif. Pendant une partie, KFIRE lit l'API que League of Legends
+          ouvre sur cet ordinateur et n'envoie que votre champion, votre niveau, votre
+          KDA, vos sbires, votre or et le temps de jeu. Les pseudos des neuf autres
+          joueurs ne quittent jamais cette machine.
+        </p>
+        {#if lol.watching}
+          <p class="muted small">Partie en cours détectée.</p>
+        {:else}
+          <p class="muted small">
+            Aucune partie en cours. L'API du jeu n'existe que pendant une partie : c'est
+            normal entre deux parties.
+          </p>
+        {/if}
+        <button class="secondary" disabled={lolBusy} onclick={() => toggleLol(false)}>
+          Désactiver le suivi
+        </button>
+      {:else}
+        <p class="muted">
+          Affiche votre partie en cours sur la page « Jeux en live » du portail, avec votre
+          champion, votre KDA, vos sbires et votre or. Rien à configurer : le jeu dit
+          lui-même quel joueur vous êtes, donc aucun pseudo à saisir.
+        </p>
+        <button class="secondary" disabled={lolBusy} onclick={() => toggleLol(true)}>
+          Activer le suivi
+        </button>
+      {/if}
+
+      {#if lolError}
+        <p class="error" role="alert">{lolError}</p>
       {/if}
     </section>
   {/if}
