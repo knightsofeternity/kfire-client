@@ -7,6 +7,61 @@ Release, so every version MUST have its own section here before it is tagged.
 The release build fails when one is missing, which is deliberate: publishing a
 version under the previous one's notes has already happened once.
 
+## 0.6.0-beta.5
+
+**Still a beta of 0.6.0.** Published as a pre-release, so the update indicator
+in everybody else's client keeps pointing at 0.5.0.
+
+### Rocket League matches that were never played
+
+More than half the matches this client reported had never happened. The game
+signals the end of a match TWICE, as `MatchEnded` and again as
+`MatchDestroyed`, and it keeps sending state frames in between for the
+end-of-match screen. This client built a match out of those frames, with the
+same statistics as the real one and a clock restarted from zero, which is why
+they all lasted well under a minute.
+
+Of the fifteen matches stored on the server, eight were such ghosts. Only two
+were duplicates of a real match; the other six arrived alone, because the real
+report never made it, so nothing could have flagged them. They went straight
+into your averages. Those rows have been removed.
+
+A match can now only begin on an opening event, never on a state frame.
+
+### The portal was not told a match had ended
+
+The end of a live match was never announced: the server only found out when its
+own timer expired the state, so a frozen score sat on the guild's live page for
+up to fifteen seconds after the final whistle. It is announced now.
+
+### Hearthstone on the live page
+
+Your game in progress now appears on the portal's live page: the mode, the
+current turn, and your placement in Battlegrounds.
+
+Nothing else leaves this machine. The Hearthstone log carries your BattleTag,
+your opponent's name and every card played; the portal receives three numbers
+and the mode, and a test fails if that list ever grows.
+
+The card refreshes every five seconds, which is how often the log is re-read.
+
+### League of Legends on the live page
+
+While you are in a game, League exposes an API on this computer. KFIRE reads it
+and shows your champion, level, KDA, creep score, gold and game time on the
+portal's live page.
+
+**Nothing to configure**: the game itself says which player you are, so unlike
+Rocket League there is no name to type and none to get wrong. Turn it on in the
+settings.
+
+That API names all ten players in the game, with their teams and items. None of
+that leaves this machine; your own name does not either, it is only used here to
+find your row among the ten.
+
+Outside a game the API does not exist, and that is the normal state, not an
+error.
+
 ## 0.6.0-beta.3
 
 **Still a beta of 0.6.0, for one tester.** Published as a pre-release, so the
