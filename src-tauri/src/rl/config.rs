@@ -1,39 +1,38 @@
-//! Le fichier qui fait ouvrir à Rocket League sa socket de statistiques.
+//! The file that makes Rocket League open its stats socket.
 //!
-//! Sans lui il n'y a RIEN à lire. Il n'est écrit qu'après accord du membre,
-//! ayant vu le chemin exact et le contenu exact, et retirer le suivi le retire.
+//! Without it there is NOTHING to read. It is only written once the member has
+//! agreed, having seen the exact path and the exact contents, and taking the
+//! tracking away takes it away too.
 //!
-//! ATTENTION : le README de `ke-rl-tracker` décrit une section `[StatsAPI]`
-//! avec `bEnabled` et `ListenPort`. C'est FAUX. Le code qui tourne chez son
-//! auteur écrit ce qui suit, et c'est lui qui fait foi.
+//! CAREFUL: the `ke-rl-tracker` README describes a `[StatsAPI]` section with
+//! `bEnabled` and `ListenPort`. That is WRONG. The code actually running at its
+//! author's writes what follows, and that is what counts.
 
-/// Le port par défaut de la socket de statistiques.
+/// The default port of the stats socket.
 pub const DEFAULT_PORT: u16 = 49123;
 
-/// La section que le jeu lit pour décider d'exporter ses statistiques.
+/// The section the game reads to decide whether to export its stats.
 ///
-/// PacketSendRate accepte 30, 60, 90 ou 120. On demande le MINIMUM : on agrège
-/// localement, donc trente états par seconde suffisent largement, et on prend
-/// au jeu moins de temps machine que le traqueur d'origine, qui en demandait
-/// soixante.
+/// PacketSendRate accepts 30, 60, 90 or 120. We ask for the MINIMUM: we
+/// aggregate locally, so thirty states per second are plenty, and we take less
+/// machine time from the game than the original tracker, which asked for
+/// sixty.
 pub const STATS_BLOCK: &str = "\n[TAGame.MatchStatsExporter_TA]\nPort=49123\nPacketSendRate=30\n";
 
-/// Le nom de la section, en minuscules, pour une comparaison insensible à la
-/// casse.
+/// The name of the section, lowercased, for a case-insensitive comparison.
 const SECTION: &str = "[tagame.matchstatsexporter_ta]";
 
-/// Si le fichier demande déjà l'export, le nôtre ou celui d'un autre traqueur.
+/// Whether the file already asks for the export, ours or another tracker's.
 pub fn has_stats_section(contents: &str) -> bool {
     contents
         .lines()
         .any(|l| l.trim().to_ascii_lowercase() == SECTION)
 }
 
-/// Le contenu avec notre section ajoutée, ou inchangé s'il y en a déjà une.
+/// The contents with our section added, or unchanged if there is one already.
 ///
-/// Ajouter une SECONDE section ne serait pas fusionné par le jeu, donc une
-/// section existante, très probablement celle d'un autre traqueur, est laissée
-/// strictement tranquille.
+/// Adding a SECOND section would not be merged by the game, so an existing
+/// section, most likely another tracker's, is left strictly alone.
 pub fn with_stats_block(contents: &str) -> String {
     if has_stats_section(contents) {
         return contents.to_string();
@@ -41,18 +40,17 @@ pub fn with_stats_block(contents: &str) -> String {
     format!("{contents}{STATS_BLOCK}")
 }
 
-/// Le contenu sans la section, à condition qu'elle soit la nôtre.
+/// The contents without the section, provided that section is ours.
 ///
-/// Le retrait se fait ligne à ligne et non par correspondance exacte, parce
-/// qu'un fichier ouvert dans le Bloc-notes revient en CRLF. Avec une
-/// correspondance exacte, désactiver le suivi ne ferait alors RIEN : l'écran
-/// confirmerait au membre que c'est coupé pendant que le jeu continuerait
-/// d'exporter. Quelqu'un qui demande à ne plus être suivi doit vraiment cesser
-/// de l'être.
+/// The removal works line by line rather than by exact match, because a file
+/// opened in Notepad comes back in CRLF. With an exact match, turning the
+/// tracking off would then do NOTHING: the screen would confirm to the member
+/// that it is off while the game kept on exporting. Someone who asks to stop
+/// being tracked must really stop being tracked.
 ///
-/// On ne retire que ce qu'on a écrit : casser la configuration d'un autre
-/// traqueur en se désactivant serait inacceptable. La section n'est reconnue
-/// comme nôtre que si ses réglages sont exactement les nôtres.
+/// We only take back what we wrote: breaking another tracker's configuration
+/// by turning ourselves off would be unacceptable. The section is recognised
+/// as ours only if its settings are exactly ours.
 pub fn without_stats_block(contents: &str) -> String {
     let eol = if contents.contains("\r\n") {
         "\r\n"
@@ -70,7 +68,7 @@ pub fn without_stats_block(contents: &str) -> String {
     else {
         return contents.to_string();
     };
-    // La section court jusqu'à la suivante, ou jusqu'à la fin.
+    // The section runs until the next one, or until the end.
     let end = lines[start + 1..]
         .iter()
         .position(|l| l.trim().starts_with('['))
@@ -84,7 +82,7 @@ pub fn without_stats_block(contents: &str) -> String {
     let mut kept: Vec<&str> = Vec::with_capacity(lines.len());
     kept.extend_from_slice(&lines[..start]);
     kept.extend_from_slice(&lines[end..]);
-    // La ligne vide que notre bloc avait ajoutée avant lui repart avec.
+    // The blank line our block had added before itself leaves with it.
     while kept.last().is_some_and(|l| l.trim().is_empty()) {
         kept.pop();
     }
@@ -96,10 +94,10 @@ pub fn without_stats_block(contents: &str) -> String {
     out
 }
 
-/// Si les réglages de cette section sont exactement ceux que nous écrivons.
+/// Whether this section's settings are exactly the ones we write.
 ///
-/// C'est ce qui distingue notre bloc de celui d'un autre traqueur, maintenant
-/// que la comparaison n'est plus littérale.
+/// That is what tells our block apart from another tracker's, now that the
+/// comparison is no longer literal.
 fn is_ours(body: &[&str]) -> bool {
     let mut port = false;
     let mut rate = false;
@@ -120,11 +118,11 @@ fn is_ours(body: &[&str]) -> bool {
     port && rate
 }
 
-/// Le port que le jeu écoutera, d'après le fichier.
+/// The port the game will listen on, according to the file.
 ///
-/// Si une section est déjà là, c'est SON port qui vaut, pas le nôtre : c'est
-/// celui-là que le jeu ouvrira. Une valeur illisible ou hors des ports
-/// utilisateurs retombe sur le défaut.
+/// If a section is already there, it is ITS port that counts, not ours: that
+/// is the one the game will open. A value that cannot be read, or one outside
+/// the user ports, falls back to the default.
 pub fn port_in(contents: &str) -> u16 {
     for line in contents.lines() {
         let l = line.trim();
@@ -157,8 +155,8 @@ mod tests {
 
     #[test]
     fn an_existing_section_is_left_strictly_alone() {
-        // Très probablement celle d'un autre traqueur. On n'y touche pas, et
-        // surtout on n'ajoute pas une SECONDE section : le jeu ne fusionne pas.
+        // Most likely another tracker's. We do not touch it, and above all we
+        // do not add a SECOND section: the game does not merge them.
         let theirs = "[TAGame.MatchStatsExporter_TA]\nPort=50000\nPacketSendRate=120\n";
         assert_eq!(with_stats_block(theirs), theirs);
     }
@@ -180,8 +178,8 @@ mod tests {
 
     #[test]
     fn removing_leaves_someone_elses_block_alone() {
-        // On ne retire que ce qu'on a écrit. Casser la configuration d'un autre
-        // traqueur en se désactivant serait inacceptable.
+        // We only take back what we wrote. Breaking another tracker's
+        // configuration by turning ourselves off would be unacceptable.
         let theirs = "[TAGame.MatchStatsExporter_TA]\nPort=50000\nPacketSendRate=120\n";
         assert_eq!(without_stats_block(theirs), theirs);
     }
@@ -230,16 +228,13 @@ mod tests {
 
     #[test]
     fn removing_works_on_a_file_that_came_back_from_notepad() {
-        // Le Bloc-notes réécrit tout le fichier en CRLF. Avec une
-        // correspondance exacte, le retrait ne faisait rien du tout.
+        // Notepad rewrites the whole file in CRLF. With an exact match, the
+        // removal did nothing at all.
         let unix = with_stats_block("[SomethingElse]\nKey=1\n");
         let crlf = unix.replace('\n', "\r\n");
         let out = without_stats_block(&crlf);
-        assert!(
-            !has_stats_section(&out),
-            "notre bloc devait partir : {out:?}"
-        );
-        assert!(out.contains("Key=1"), "le reste du fichier devait rester");
+        assert!(!has_stats_section(&out), "our block had to go: {out:?}");
+        assert!(out.contains("Key=1"), "the rest of the file had to stay");
     }
 
     #[test]
@@ -248,9 +243,9 @@ mod tests {
         let out = without_stats_block(&crlf);
         assert!(
             out.contains("\r\n"),
-            "les fins de ligne du membre sont les siennes"
+            "the member's line endings are his own"
         );
-        assert!(!out.contains("\n\n"), "pas de ligne vide parasite");
+        assert!(!out.contains("\n\n"), "no stray blank line");
     }
 
     #[test]
@@ -261,8 +256,8 @@ mod tests {
 
     #[test]
     fn a_section_with_an_extra_key_is_not_ours() {
-        // Quelqu'un a ajouté un réglage au nôtre : ce n'est plus le nôtre, on
-        // n'y touche pas.
+        // Someone added a setting to ours: it is not ours any more, we do not
+        // touch it.
         let mixed =
             "[TAGame.MatchStatsExporter_TA]\nPort=49123\nPacketSendRate=30\nSomethingElse=1\n";
         assert_eq!(without_stats_block(mixed), mixed);

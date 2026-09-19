@@ -1,9 +1,8 @@
-//! Le client TCP qui écoute Rocket League.
+//! The TCP client that listens to Rocket League.
 //!
-//! Le jeu est le serveur, nous sommes le client. Un fil bloquant dédié, comme
-//! le suiveur de logs de Hearthstone : `tokio` est compilé sans la
-//! fonctionnalité `net` dans ce dépôt, et ce module n'a aucune raison d'exiger
-//! qu'on l'ajoute.
+//! The game is the server, we are the client. A dedicated blocking thread, like
+//! the Hearthstone log follower: `tokio` is built without the `net` feature in
+//! this repository, and this module has no business demanding that it be added.
 
 use std::collections::BTreeSet;
 use std::io::Read;
@@ -14,50 +13,49 @@ use std::time::Duration;
 
 use serde_json::Value;
 
-/// Si un fil de suivi est actuellement connecté à la socket du jeu.
+/// Whether a watcher thread is currently connected to the game's socket.
 static CONNECTED: AtomicBool = AtomicBool::new(false);
 
-/// Si un fil de suivi est actuellement connecté à la socket du jeu.
+/// Whether a watcher thread is currently connected to the game's socket.
 pub fn connected() -> bool {
     CONNECTED.load(Ordering::SeqCst)
 }
 
-/// Combien de messages du jeu ont été décodés depuis le lancement.
+/// How many messages from the game have been decoded since startup.
 ///
-/// Un compteur qui monte prouve que la socket, le découpage des trames et le
-/// décodage fonctionnent. S'il reste à zéro alors que la connexion est
-/// établie, le jeu ne parle pas le protocole qu'on attend, et c'est une
-/// information qu'aucune autre trace ne donne.
+/// A counter that climbs proves the socket, the frame cutting and the decoding
+/// all work. If it stays at zero while the connection is up, the game is not
+/// speaking the protocol we expect, and no other trace tells us that.
 static DECODED: AtomicU64 = AtomicU64::new(0);
 
 pub fn decoded() -> u64 {
     DECODED.load(Ordering::Relaxed)
 }
 
-/// Les noms d'évènements déjà journalisés parce qu'on ne les traite pas.
+/// The event names already logged because we do not handle them.
 ///
-/// Plafonné comme `names_seen` dans `parser.rs` : cet ensemble existe pour
-/// écrire une ligne de journal une fois chacun, pas pour grossir.
+/// Capped like `names_seen` in `parser.rs`: this set exists to write one log
+/// line for each of them, not to grow.
 static UNHANDLED_LOGGED: Mutex<BTreeSet<String>> = Mutex::new(BTreeSet::new());
 
-/// Les évènements du cycle de vie qui peuvent ouvrir un match. Le GUID n'est pas
-/// disponible à `MatchCreated`, d'où les replis.
+/// The lifecycle events that may open a match. The GUID is not available at
+/// `MatchCreated`, hence the fallbacks.
 const OPENS: &[&str] = &["MatchInitialized", "CountdownBegin", "RoundStarted"];
 
-/// Ce que la boucle rend à son appelant.
+/// What the loop hands back to its caller.
 pub enum Event {
-    /// Un match s'ouvre.
+    /// A match is opening.
     Open,
-    /// Un état de match, à prendre en compte.
+    /// A match state, to be taken into account.
     State(Value),
-    /// Le match se termine.
+    /// The match is ending.
     Close,
 }
 
-/// Se connecte et suit la socket jusqu'à ce que `stop` passe à vrai.
+/// Connects and follows the socket until `stop` turns true.
 ///
-/// `on` est appelé pour chaque évènement utile. La reconnexion est automatique :
-/// le jeu peut être lancé avant nous, ou redémarré sous nous.
+/// `on` is called for every useful event. Reconnection is automatic: the game
+/// may be started before us, or restarted underneath us.
 pub fn follow(port: u16, stop: &AtomicBool, mut on: impl FnMut(Event)) {
     log::info!("rl: watching for the game's stats socket on 127.0.0.1:{port}");
     let mut announced = false;
@@ -128,10 +126,10 @@ fn read_until_closed(mut stream: TcpStream, stop: &AtomicBool, on: &mut impl FnM
                 "UpdateState" => on(Event::State(data)),
                 "MatchDestroyed" | "MatchEnded" => on(Event::Close),
                 _ => {
-                    // Un nom d'évènement qu'on ne traite pas. Journalisé UNE
-                    // fois chacun : si le jeu nomme autrement le début ou la
-                    // fin d'un match, c'est ici qu'on le verra, et nulle part
-                    // ailleurs.
+                    // An event name we do not handle. Logged ONCE for each of
+                    // them: if the game ever names the start or the end of a
+                    // match differently, here is where we will see it, and
+                    // nowhere else.
                     if let Ok(mut seen) = UNHANDLED_LOGGED.lock() {
                         if seen.len() < 32 && seen.insert(name.clone()) {
                             log::info!("rl: unhandled event from the game: {name}");
@@ -141,9 +139,9 @@ fn read_until_closed(mut stream: TcpStream, stop: &AtomicBool, on: &mut impl FnM
             }
         }
 
-        // Un tampon qui enfle sans jamais livrer un objet complet veut dire que
-        // le flux n'est pas ce qu'on croit. Mieux vaut repartir propre que
-        // grossir sans fin.
+        // A buffer that swells without ever yielding a whole object means the
+        // stream is not what we think it is. Better to start clean than to grow
+        // without end.
         if buf.len() > 8 << 20 {
             log::warn!("rl: buffer grew past 8 MiB without a whole object, dropping it");
             buf.clear();

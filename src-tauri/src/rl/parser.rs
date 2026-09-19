@@ -1,57 +1,56 @@
-//! Lire un match Rocket League, en fonctions pures.
+//! Reading a Rocket League match, in pure functions.
 //!
-//! La feuille de match complète, qui porte le nom de tous les joueurs, vit ici
-//! et ne va pas plus loin. Ce module s'en sert pour calculer, et n'en sort que
-//! des faits sur le membre.
+//! The full scoresheet, which carries every player's name, lives here and goes
+//! no further. This module uses it to compute, and lets out nothing but facts
+//! about the member.
 
 use serde_json::Value;
 
-/// Les playlists sans adversaire : partie libre, ateliers, entraînement. Les
-/// rapporter fausserait tous les ratios.
+/// The playlists with no opponent: free play, workshop, training. Reporting
+/// them would skew every ratio.
 pub const TRAINING: &[i64] = &[0, 9, 19, 21, 73];
 
-/// Les playlists classées, d'après le catalogue Psyonix.
+/// The ranked playlists, according to the Psyonix catalogue.
 pub const RANKED: &[i64] = &[10, 11, 13, 27, 28, 29, 30];
 
-/// Combien de pseudos distincts on retient au plus.
+/// How many distinct player names we keep at most.
 ///
-/// Ce n'est pas de la méfiance envers le jeu, qui tourne sur la machine du
-/// membre : c'est que cet ensemble ne sert qu'à écrire UNE ligne de journal,
-/// et qu'une ligne de journal n'a pas besoin de plus. Un match réel en compte
-/// huit au maximum, remplaçants compris.
+/// This is not distrust of the game, which runs on the member's own machine:
+/// it is that this set serves only to write ONE log line, and a log line needs
+/// no more than that. A real match holds eight at most, substitutes included.
 const MAX_NAMES_SEEN: usize = 32;
 
-/// Si cette playlist est classée.
+/// Whether this playlist is ranked.
 pub fn is_ranked(playlist: i64) -> bool {
     RANKED.contains(&playlist)
 }
 
-/// Si cette playlist n'a pas d'adversaire et ne doit jamais être rapportée.
+/// Whether this playlist has no opponent and must never be reported.
 pub fn is_training(playlist: i64) -> bool {
     TRAINING.contains(&playlist)
 }
 
-/// Les raisons pour lesquelles un match n'est pas rapporté.
+/// The reasons a match is not reported.
 ///
-/// `finish()` en rend exactement une : jamais une combinaison, jamais un
-/// `None` muet. Chaque variante dit la vérité qu'elle constate, pas une
-/// hypothèse sur sa cause.
+/// `finish()` returns exactly one of them: never a combination, never a silent
+/// `None`. Each variant states the truth it observed, not a guess at its
+/// cause.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Refusal {
-    /// Aucun `UpdateState` n'a jamais été reçu : il n'y a rien à résumer.
+    /// No `UpdateState` was ever received: there is nothing to summarise.
     NeverObserved,
-    /// Un des deux camps n'a jamais compté le moindre joueur. La partie libre
-    /// et l'entraînement n'ont personne en face ; un vrai match, si.
+    /// One of the two sides never held a single player. Free play and training
+    /// have nobody on the other side; a real match does.
     NoOpponent,
-    /// Le jeu a vraiment envoyé une playlist, et c'est une playlist
-    /// d'entraînement d'après le catalogue Psyonix.
+    /// The game really did send a playlist, and it is a training playlist
+    /// according to the Psyonix catalogue.
     TrainingPlaylist(i64),
-    /// La taille d'équipe observée (le plus grand effectif vu dans un camp)
-    /// sort de la plage plausible pour Rocket League.
+    /// The observed team size (the largest roster seen on one side) falls
+    /// outside the range that is plausible for Rocket League.
     TeamSizeOutOfRange(i64),
-    /// Le pseudo réglé ne correspond à aucun joueur de la feuille de match.
+    /// The configured player name matches nobody on the scoresheet.
     MemberNotFound,
-    /// Le membre a été trouvé, mais avec un camp qui n'est ni bleu ni orange.
+    /// The member was found, but on a team that is neither blue nor orange.
     MemberTeamInvalid(i64),
 }
 
@@ -68,11 +67,11 @@ impl std::fmt::Display for Refusal {
     }
 }
 
-/// Le résumé d'un match terminé : uniquement des faits sur le membre.
+/// The summary of a finished match: nothing but facts about the member.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Summary {
-    /// `None` quand le jeu n'a jamais envoyé cette playlist. C'est la norme :
-    /// le protocole réel de Rocket League n'a pas de champ `Playlist`.
+    /// `None` when the game never sent this playlist. That is the norm: Rocket
+    /// League's actual protocol has no `Playlist` field.
     pub playlist: Option<i64>,
     pub team_size: i64,
     pub player_team: i64,
@@ -89,7 +88,7 @@ pub struct Summary {
     pub duration_seconds: i64,
 }
 
-/// L'état courant d'un match, pour le direct. Jamais écrit, jamais rejoué.
+/// A match's current state, for the live feed. Never written, never replayed.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Live {
     pub team_blue_score: i64,
@@ -104,7 +103,7 @@ pub struct Live {
     pub demos: i64,
 }
 
-/// Les statistiques d'un joueur, telles que le jeu les donne.
+/// One player's statistics, exactly as the game gives them.
 #[derive(Debug, Clone, Default)]
 struct Stats {
     team: i64,
@@ -116,37 +115,37 @@ struct Stats {
     demos: i64,
 }
 
-/// Un match en cours d'observation.
+/// A match being observed.
 pub struct Match {
     member: String,
     guid: Option<String>,
-    /// `None` tant que le jeu n'a jamais envoyé de champ `Playlist`. C'est
-    /// l'état normal : le vrai protocole n'a pas ce champ.
+    /// `None` for as long as the game has never sent a `Playlist` field. That
+    /// is the normal state: the real protocol has no such field.
     playlist: Option<i64>,
     blue: i64,
     orange: i64,
     seconds: i64,
     overtime: bool,
-    /// Le maximum de joueurs vu dans chaque équipe, séparément. Un joueur qui
-    /// quitte disparaît du dernier état, donc seul le maximum dit la vraie
-    /// taille du match. Séparés parce qu'un des deux à zéro veut dire
-    /// « personne en face », donc partie libre ou entraînement, jamais un
-    /// vrai match : c'est la garde principale, plus fiable qu'une playlist
-    /// que le jeu n'envoie pas forcément.
+    /// The largest player count seen on each team, kept separately. A player
+    /// who leaves disappears from the last state, so only the maximum tells the
+    /// match's true size. Kept apart because either one at zero means "nobody
+    /// on the other side", hence free play or training, never a real match:
+    /// this is the main guard, more reliable than a playlist the game does not
+    /// necessarily send.
     max_players_blue: i64,
     max_players_orange: i64,
-    /// Les statistiques du membre, et le meilleur score vu dans chaque équipe.
+    /// The member's statistics, and the best score seen on each team.
     mine: Option<Stats>,
     best_blue: i64,
     best_orange: i64,
     seen: bool,
-    /// Tous les pseudos croisés pendant le match.
+    /// Every player name met during the match.
     ///
-    /// Ils ne quittent JAMAIS la machine. Ils servent à une seule chose : quand
-    /// le membre n'a jamais été trouvé, les écrire dans le journal local pour
-    /// qu'il voie lui-même sous quel nom le jeu le désigne, et corrige son
-    /// réglage. Sans cela, un pseudo mal saisi ne produit rien du tout et reste
-    /// indiagnosticable.
+    /// They NEVER leave this machine. They serve one purpose only: when the
+    /// member was never found, writing them to the local log so that he can see
+    /// for himself under what name the game refers to him, and fix his setting.
+    /// Without that, a mistyped name produces nothing at all and stays
+    /// impossible to diagnose.
     names_seen: std::collections::BTreeSet<String>,
 }
 
@@ -154,13 +153,13 @@ fn i(v: &Value, k: &str) -> i64 {
     v.get(k).and_then(Value::as_i64).unwrap_or(0)
 }
 
-/// Si ce nom de la feuille de match est celui du membre.
+/// Whether this name from the scoresheet is the member's.
 ///
-/// La comparaison ignore la casse et les espaces de bord. Le format exact du
-/// champ `Name` n'a jamais été vérifié contre le vrai jeu, seulement lu dans le
-/// code de `ke-rl-tracker`, et une faute de casse dans le réglage est l'erreur
-/// la plus probable. La tolérance ne coûte rien et supprime toute une classe de
-/// pannes silencieuses.
+/// The comparison ignores case and surrounding spaces. The exact format of the
+/// `Name` field has never been checked against the real game, only read in the
+/// `ke-rl-tracker` code, and a case slip in the setting is the likeliest
+/// mistake. The tolerance costs nothing and removes a whole class of silent
+/// failures.
 fn same_player(name: Option<&str>, member: &str) -> bool {
     match name {
         Some(n) => n.trim().eq_ignore_ascii_case(member.trim()),
@@ -169,7 +168,7 @@ fn same_player(name: Option<&str>, member: &str) -> bool {
 }
 
 impl Match {
-    /// Ouvre l'observation d'un match pour ce membre.
+    /// Opens the observation of a match for this member.
     pub fn new(member: &str) -> Self {
         Self {
             member: member.to_string(),
@@ -189,28 +188,27 @@ impl Match {
         }
     }
 
-    /// Le GUID du match, une fois qu'il est connu.
+    /// The match's GUID, once it is known.
     pub fn guid(&self) -> Option<String> {
         self.guid.clone()
     }
 
-    /// Prend en compte un `UpdateState`.
+    /// Takes an `UpdateState` into account.
     pub fn observe(&mut self, data: &Value) {
         if let Some(g) = data.get("MatchGuid").and_then(Value::as_str) {
-            // Le GUID est le même à chaque image d'un match : ne le réécrire
-            // que s'il a vraiment changé.
+            // The GUID is the same on every frame of a match: only rewrite it
+            // when it has genuinely changed.
             if !g.is_empty() && self.guid.as_deref() != Some(g) {
                 self.guid = Some(g.to_string());
             }
         }
 
-        // Emprunté, jamais cloné : on ne lit ici que quatre nombres, et cette
-        // fonction tourne trente fois par seconde pendant tout le match.
+        // Borrowed, never cloned: only four numbers are read here, and this
+        // function runs thirty times a second for the whole match.
         if let Some(game) = data.get("Game").filter(|g| g.is_object()) {
-            // Ne jamais inventer une playlist : le vrai protocole n'a pas ce
-            // champ. `i()` rendrait `0` pour une clé absente, et `0` est une
-            // playlist d'entraînement ; c'est exactement le bug qui refusait
-            // tous les matchs réels.
+            // Never invent a playlist: the real protocol has no such field.
+            // `i()` would return `0` for a missing key, and `0` is a training
+            // playlist; that is exactly the bug that refused every real match.
             if let Some(p) = game.get("Playlist").and_then(Value::as_i64) {
                 self.playlist = Some(p);
             }
@@ -230,8 +228,9 @@ impl Match {
             }
         }
 
-        // Players est à la RACINE de Data, pas sous Game. L'agent Python
-        // d'origine se trompe d'endroit ; recopier son erreur ne lirait rien.
+        // Players sits at the ROOT of Data, not under Game. The original
+        // Python agent looks in the wrong place; copying its mistake would read
+        // nothing at all.
         let Some(players) = data.get("Players").and_then(Value::as_array) else {
             return;
         };
@@ -252,9 +251,9 @@ impl Match {
                 _ => {}
             }
             if let Some(n) = p.get("Name").and_then(Value::as_str) {
-                // contains() prend un &str sans allouer ; seul un nom vraiment
-                // nouveau paie une String, soit une poignée par match au lieu
-                // d'une par joueur et par image.
+                // contains() takes a &str without allocating; only a genuinely
+                // new name pays for a String, so a handful per match instead of
+                // one per player per frame.
                 if !self.names_seen.contains(n) && self.names_seen.len() < MAX_NAMES_SEEN {
                     self.names_seen.insert(n.to_string());
                 }
@@ -276,12 +275,12 @@ impl Match {
         self.seen = true;
     }
 
-    /// Les pseudos croisés pendant le match, pour le journal LOCAL uniquement.
+    /// The names met during the match, for the LOCAL log only.
     pub fn names_seen(&self) -> Vec<String> {
         self.names_seen.iter().cloned().collect()
     }
 
-    /// L'état courant, pour le direct.
+    /// The current state, for the live feed.
     pub fn live(&self) -> Option<Live> {
         let mine = self.mine.as_ref()?;
         Some(Live {
@@ -298,27 +297,27 @@ impl Match {
         })
     }
 
-    /// Le résumé, si et seulement si il est COMPLET.
+    /// The summary, if and only if it is COMPLETE.
     ///
-    /// Rend la raison précise dès qu'il manque quelque chose : jamais observé,
-    /// pas d'adversaire, playlist d'entraînement (seulement quand le jeu l'a
-    /// vraiment envoyée), taille d'équipe impossible, ou statistiques du
-    /// membre absentes. Sa ligne peut manquer du dernier état s'il quitte
-    /// avant la fin, et le code de production de `ke-rl-tracker` garde
-    /// `if our_player:` pour exactement cette raison. Mieux vaut un match
-    /// manquant qu'un match faux : un zéro inventé est indiscernable d'un vrai
-    /// zéro et empoisonnerait les moyennes de la guilde pour toujours.
+    /// Returns the precise reason as soon as anything is missing: never
+    /// observed, no opponent, training playlist (only when the game really did
+    /// send one), impossible team size, or the member's statistics absent. His
+    /// row can be missing from the last state if he leaves before the end, and
+    /// `ke-rl-tracker`'s production code keeps `if our_player:` for exactly
+    /// that reason. Better a missing match than a wrong one: an invented zero
+    /// is indistinguishable from a real zero and would poison the guild's
+    /// averages for ever.
     pub fn finish(&self, duration_seconds: i64) -> Result<Summary, Refusal> {
         if !self.seen {
             return Err(Refusal::NeverObserved);
         }
-        // La vraie garde : partie libre et entraînement n'ont personne en
-        // face. Un vrai match, si, toujours, des deux côtés.
+        // The real guard: free play and training have nobody on the other
+        // side. A real match does, always, on both sides.
         if self.max_players_blue == 0 || self.max_players_orange == 0 {
             return Err(Refusal::NoOpponent);
         }
-        // Gardée pour le jour où Psyonix ajouterait ce champ, mais seulement
-        // quand il est VRAIMENT présent : jamais inventé.
+        // Kept for the day Psyonix adds this field, but only when it is REALLY
+        // there: never invented.
         if let Some(p) = self.playlist {
             if is_training(p) {
                 return Err(Refusal::TrainingPlaylist(p));
@@ -344,8 +343,8 @@ impl Match {
             std::cmp::Ordering::Equal => "draw",
         };
 
-        // Le MVP est le meilleur score de l'équipe GAGNANTE, donc il n'existe
-        // pas sans victoire.
+        // The MVP is the best score on the WINNING team, so there is no MVP
+        // without a win.
         let best_of_mine = if mine.team == 0 {
             self.best_blue
         } else {
@@ -377,12 +376,12 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    /// La forme réelle du fil, telle que documentée par l'API Stats de
-    /// Psyonix : `Data.Game` n'a JAMAIS de champ `Playlist`. Ce test est la
-    /// preuve du bug : avec l'ancien code, `i(game, "Playlist")` renvoyait `0`
-    /// pour ce champ absent, `0` est dans `TRAINING`, et le match était refusé
-    /// alors que le membre y était bel et bien, avec un adversaire, une
-    /// victoire nette. Il doit échouer avant le correctif et réussir après.
+    /// The stream's real shape, as documented by the Psyonix Stats API:
+    /// `Data.Game` NEVER has a `Playlist` field. This test is the proof of the
+    /// bug: with the old code, `i(game, "Playlist")` returned `0` for that
+    /// missing field, `0` is in `TRAINING`, and the match was refused even
+    /// though the member was very much in it, with an opponent and a clear win.
+    /// It must fail before the fix and pass after it.
     #[test]
     fn a_real_match_with_no_playlist_field_is_summarised() {
         let state = json!({
@@ -454,14 +453,14 @@ mod tests {
         m.observe(&state);
         let s = m
             .finish(300)
-            .expect("un match réel sans Playlist doit se résumer");
+            .expect("a real match with no Playlist must be summarised");
         assert_eq!(s.playlist, None);
         assert_eq!(s.result, "win");
         assert_eq!(s.team_size, 2);
     }
 
-    /// Sans adversaire, personne en face : partie libre ou entraînement,
-    /// jamais un vrai match. Le membre est seul sur son équipe.
+    /// With no opponent, nobody on the other side: free play or training,
+    /// never a real match. The member is alone on his team.
     #[test]
     fn a_solo_match_with_nobody_on_the_other_team_has_no_opponent() {
         let mut m = Match::new("Bushido");
@@ -469,8 +468,8 @@ mod tests {
         assert_eq!(m.finish(300), Err(Refusal::NoOpponent));
     }
 
-    /// Le champ existe vraiment cette fois : la règle historique s'applique
-    /// encore, mais seulement quand la donnée est réellement présente.
+    /// The field really is there this time: the historical rule still applies,
+    /// but only when the data is genuinely present.
     #[test]
     fn a_real_match_with_a_present_training_playlist_is_refused() {
         let mut m = Match::new("Bushido");
@@ -478,8 +477,8 @@ mod tests {
         assert_eq!(m.finish(300), Err(Refusal::TrainingPlaylist(73)));
     }
 
-    /// Le membre est absent de la feuille : c'est le seul cas où le pseudo
-    /// réglé peut vraiment être en cause.
+    /// The member is absent from the scoresheet: this is the only case where
+    /// the configured name can really be to blame.
     #[test]
     fn a_real_match_without_the_member_is_member_not_found() {
         let mut m = Match::new("Bushido");
@@ -524,7 +523,7 @@ mod tests {
     fn a_finished_match_is_summarised() {
         let mut m = Match::new("Bushido");
         m.observe(&state(13, 4, 2, json!([me(0, 2), them("x", 1, 100)])));
-        let s = m.finish(300).expect("un match complet doit se résumer");
+        let s = m.finish(300).expect("a complete match must be summarised");
         assert_eq!(s.playlist, Some(13));
         assert_eq!(s.player_team, 0);
         assert_eq!(s.team_blue_score, 4);
@@ -536,8 +535,8 @@ mod tests {
 
     #[test]
     fn the_orange_side_wins_when_its_score_is_higher() {
-        // Le miroir du cas bleu. L'inverser rejetterait la moitié des
-        // victoires de la guilde sans que rien d'autre ne le montre.
+        // The mirror of the blue case. Getting it backwards would throw away
+        // half the guild's wins with nothing else to show for it.
         let mut m = Match::new("Bushido");
         m.observe(&state(11, 1, 5, json!([me(1, 3), them("x", 0, 100)])));
         let s = m.finish(300).unwrap();
@@ -554,8 +553,8 @@ mod tests {
 
     #[test]
     fn the_team_size_is_the_largest_ever_seen() {
-        // Un joueur qui quitte disparaît du dernier état. Sans le maximum, un
-        // 3v3 finirait enregistré comme un 2v2.
+        // A player who leaves disappears from the last state. Without the
+        // maximum, a 3v3 would end up recorded as a 2v2.
         let mut m = Match::new("Bushido");
         m.observe(&state(
             13,
@@ -588,7 +587,7 @@ mod tests {
             1,
             json!([me(0, 2), them("a", 0, 300), them("b", 1, 500)]),
         ));
-        // Le membre a 420, son coéquipier 300, l'adversaire 500 mais il perd.
+        // The member has 420, his team-mate 300, the opponent 500 but loses.
         assert!(m.finish(300).unwrap().mvp);
     }
 
@@ -603,9 +602,10 @@ mod tests {
 
     #[test]
     fn a_match_without_the_member_is_refused() {
-        // Sa ligne peut manquer du dernier état, typiquement s'il quitte avant
-        // la fin. Le code de production de ke-rl-tracker garde `if our_player:`
-        // pour cette raison. Un zéro inventé serait indiscernable d'un vrai.
+        // His row can be missing from the last state, typically if he leaves
+        // before the end. ke-rl-tracker's production code keeps `if our_player:`
+        // for that reason. An invented zero would be indistinguishable from a
+        // real one.
         let mut m = Match::new("Bushido");
         m.observe(&state(
             13,
@@ -613,33 +613,32 @@ mod tests {
             2,
             json!([them("a", 0, 100), them("b", 1, 100)]),
         ));
-        // Modifié : `finish` rend désormais un `Result`, la variante exacte
-        // prouve que c'est bien l'absence du membre qui est en cause, pas
-        // l'absence d'adversaire (les deux camps ont un joueur).
+        // Changed: `finish` now returns a `Result`, and the exact variant
+        // proves it really is the member's absence that is to blame, not the
+        // absence of an opponent (both sides have a player).
         assert_eq!(m.finish(300), Err(Refusal::MemberNotFound));
     }
 
     #[test]
     fn the_member_is_found_whatever_the_case_and_the_spacing() {
-        // Le format exact du champ Name n'a jamais été vérifié contre le vrai
-        // jeu. Une faute de casse dans le réglage est l'erreur la plus probable,
-        // et sans tolérance elle ne produirait AUCUN match, sans rien dire.
-        // Modifié : un adversaire est ajouté, sinon la nouvelle règle
-        // « il faut un adversaire » refuserait le match avant même de
-        // regarder le pseudo.
+        // The exact format of the Name field has never been checked against the
+        // real game. A case slip in the setting is the likeliest mistake, and
+        // without the tolerance it would produce NO match at all, saying
+        // nothing. Changed: an opponent is added, otherwise the new "there must
+        // be an opponent" rule would refuse the match before even looking at
+        // the name.
         for written in ["bushido", "BUSHIDO", "  Bushido  "] {
             let mut m = Match::new(written);
             m.observe(&state(13, 4, 2, json!([me(0, 2), them("x", 1, 100)])));
-            assert!(m.finish(300).is_ok(), "{written} aurait dû correspondre");
+            assert!(m.finish(300).is_ok(), "{written} should have matched");
         }
     }
 
     #[test]
     fn the_names_seen_are_kept_for_the_local_log_only() {
-        // Quand le membre n'est jamais trouvé, il doit pouvoir lire dans son
-        // journal sous quel nom le jeu le désigne. Ces noms ne partent nulle
-        // part : aucune charge utile ne les porte, ce que prouvent les tests
-        // d'épinglage de mod.rs.
+        // When the member is never found, he must be able to read in his own
+        // log under what name the game refers to him. Those names go nowhere:
+        // no payload carries them, as the pinning tests in mod.rs prove.
         let mut m = Match::new("Personne");
         m.observe(&state(
             13,
@@ -647,15 +646,15 @@ mod tests {
             0,
             json!([me(0, 1), them("Adversaire", 1, 10)]),
         ));
-        // Modifié : `finish` rend un `Result` désormais.
-        assert!(m.finish(300).is_err(), "un membre absent refuse le match");
+        // Changed: `finish` now returns a `Result`.
+        assert!(m.finish(300).is_err(), "an absent member refuses the match");
         assert_eq!(m.names_seen(), vec!["Adversaire", "Bushido"]);
     }
 
     #[test]
     fn a_match_never_observed_is_refused() {
-        // Modifié : la variante exacte prouve qu'on distingue bien « jamais
-        // observé » des autres refus, maintenant que `finish` rend un `Result`.
+        // Changed: the exact variant proves we do tell "never observed" apart
+        // from the other refusals, now that `finish` returns a `Result`.
         assert_eq!(
             Match::new("Bushido").finish(300),
             Err(Refusal::NeverObserved)
@@ -664,17 +663,17 @@ mod tests {
 
     #[test]
     fn a_training_playlist_is_refused() {
-        // Modifié : un adversaire est ajouté à la feuille. Sans lui, la
-        // nouvelle règle « il faut un adversaire » refuserait le match avec
-        // `NoOpponent` avant même de regarder la playlist, et ce test ne
-        // prouverait plus rien sur la playlist elle-même.
+        // Changed: an opponent is added to the scoresheet. Without him, the new
+        // "there must be an opponent" rule would refuse the match with
+        // `NoOpponent` before even looking at the playlist, and this test would
+        // no longer prove anything about the playlist itself.
         for playlist in [0, 9, 19, 21, 73] {
             let mut m = Match::new("Bushido");
             m.observe(&state(playlist, 0, 0, json!([me(0, 0), them("x", 1, 0)])));
             assert_eq!(
                 m.finish(60),
                 Err(Refusal::TrainingPlaylist(playlist)),
-                "playlist {playlist} devait être refusée"
+                "playlist {playlist} had to be refused"
             );
         }
     }
@@ -682,10 +681,10 @@ mod tests {
     #[test]
     fn a_ranked_playlist_is_recognised() {
         for playlist in [10, 11, 13, 27, 28, 29, 30] {
-            assert!(is_ranked(playlist), "{playlist} est classée");
+            assert!(is_ranked(playlist), "{playlist} is ranked");
         }
         for playlist in [1, 2, 3, 6, 22, 24] {
-            assert!(!is_ranked(playlist), "{playlist} n'est pas classée");
+            assert!(!is_ranked(playlist), "{playlist} is not ranked");
         }
     }
 
@@ -698,25 +697,22 @@ mod tests {
             1,
             json!([me(0, 1), them("Adversaire", 1, 999)]),
         ));
-        let live = m.live().expect("un match observé a un état");
+        let live = m.live().expect("an observed match has a state");
         assert_eq!(live.team_blue_score, 2);
         assert_eq!(live.team_orange_score, 1);
         assert_eq!(live.goals, 1);
-        assert_eq!(
-            live.score, 420,
-            "le score du membre, pas celui de l'adversaire"
-        );
+        assert_eq!(live.score, 420, "the member's score, not the opponent's");
     }
 
     #[test]
     fn players_are_read_from_the_root_not_from_game() {
-        // L'agent Python d'origine cherche Data.Teams et Data.Players au mauvais
-        // endroit. Si on recopiait son erreur, rien ne serait jamais lu.
+        // The original Python agent looks for Data.Teams and Data.Players in
+        // the wrong place. If we copied its mistake, nothing would ever be read.
         //
-        // Modifié : un adversaire est ajouté à la racine, sinon la nouvelle
-        // règle « il faut un adversaire » refuserait le match (un seul joueur,
-        // côté bleu, dans les Players de la racine) avant de prouver quoi que
-        // ce soit sur l'emplacement lu.
+        // Changed: an opponent is added at the root, otherwise the new "there
+        // must be an opponent" rule would refuse the match (a single player, on
+        // the blue side, in the root's Players) before proving anything about
+        // which location is read.
         let mut m = Match::new("Bushido");
         m.observe(&json!({
             "MatchGuid": "g",
@@ -726,7 +722,7 @@ mod tests {
             "Players": [me(0, 1), them("x", 1, 0)],
         }));
         let s = m.finish(300).unwrap();
-        assert_eq!(s.player_team, 0, "Players à la racine fait foi");
+        assert_eq!(s.player_team, 0, "the root's Players is what counts");
         assert_eq!(s.goals, 1);
     }
 
