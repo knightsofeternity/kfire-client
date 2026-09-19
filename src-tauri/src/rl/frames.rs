@@ -1,15 +1,15 @@
-//! Le découpage du flux TCP de Rocket League.
+//! Cutting Rocket League's TCP stream into frames.
 //!
-//! Le jeu n'envoie AUCUN délimiteur, et ses objets font parfois des dizaines de
-//! kilo-octets. On compte donc les accolades, en ignorant celles qui vivent
-//! dans une chaîne et en respectant les échappements. Les deux implémentations
-//! de `ke-rl-tracker` font exactement cela : c'est du vécu, pas de la prudence.
+//! The game sends NO delimiter at all, and its objects sometimes run to tens of
+//! kilobytes. So we count braces, ignoring the ones that live inside a string
+//! and honouring escapes. Both `ke-rl-tracker` implementations do exactly this:
+//! it comes from experience, not from caution.
 
 use serde_json::Value;
 
-/// Prend le premier objet JSON complet du tampon.
+/// Takes the first whole JSON object out of the buffer.
 ///
-/// Rend l'objet et ce qui reste, ou rien s'il faut lire davantage.
+/// Returns the object and what is left, or nothing if more must be read.
 pub fn take_frame(buf: &[u8]) -> Option<(&[u8], &[u8])> {
     let start = buf.iter().position(|&b| b == b'{')?;
 
@@ -46,10 +46,10 @@ pub fn take_frame(buf: &[u8]) -> Option<(&[u8], &[u8])> {
     None
 }
 
-/// Décode une enveloppe `{"Event": "...", "Data": {...}}`.
+/// Decodes a `{"Event": "...", "Data": {...}}` envelope.
 ///
-/// `Data` arrive tantôt comme objet, tantôt comme chaîne contenant du JSON, et
-/// parfois pas du tout. Les trois cas sont normaux.
+/// `Data` arrives sometimes as an object, sometimes as a string holding JSON,
+/// and sometimes not at all. All three cases are normal.
 pub fn decode(frame: &[u8]) -> Option<(String, Value)> {
     let v: Value = serde_json::from_slice(frame).ok()?;
     let name = v.get("Event")?.as_str()?.to_string();
@@ -98,8 +98,8 @@ mod tests {
 
     #[test]
     fn an_escaped_quote_does_not_close_the_string() {
-        // Sans cette règle, le compteur croirait la chaîne finie et couperait
-        // l'objet en plein milieu.
+        // Without this rule the counter would think the string had ended and
+        // would cut the object right down the middle.
         let src = br#"{"a":"say \" }"}"#;
         let (obj, rest) = take_frame(src).unwrap();
         assert_eq!(obj, src);
@@ -133,7 +133,8 @@ mod tests {
 
     #[test]
     fn an_object_split_across_two_reads_is_taken_once_whole() {
-        // C'est le cas normal : la socket rend ce qu'elle a, pas ce qu'on veut.
+        // This is the normal case: the socket gives back what it has, not what
+        // we want.
         let mut buf: Vec<u8> = br#"{"Event":"Update"#.to_vec();
         assert!(take_frame(&buf).is_none());
         buf.extend_from_slice(br#"State","Data":{}}"#);
@@ -151,8 +152,8 @@ mod tests {
 
     #[test]
     fn an_envelope_with_a_string_data_is_decoded_too() {
-        // Le jeu encode parfois Data comme une CHAÎNE contenant du JSON. Les
-        // deux implémentations d'origine gèrent ce cas, donc il arrive vraiment.
+        // The game sometimes encodes Data as a STRING holding JSON. Both of the
+        // original implementations handle that case, so it really happens.
         let (name, data) =
             decode(br#"{"Event":"GoalScored","Data":"{\"GoalSpeed\":97.5}"}"#).unwrap();
         assert_eq!(name, "GoalScored");
@@ -171,14 +172,14 @@ mod tests {
         assert!(decode(b"not json").is_none());
         assert!(
             decode(br#"{"Data":{}}"#).is_none(),
-            "sans Event, rien à faire"
+            "without an Event there is nothing to do"
         );
     }
 
     #[test]
     fn a_stream_cut_at_every_possible_offset_still_yields_every_object() {
-        // Le vrai risque n'est pas un objet coupé une fois, c'est un flux
-        // haché à un endroit qu'on n'avait pas prévu. On les essaie tous.
+        // The real risk is not an object cut once, it is a stream chopped at a
+        // place we had not thought of. So we try every one of them.
         let stream = br#"{"Event":"A","Data":{"x":"}{"}}{"Event":"B","Data":"{\"y\":1}"}"#;
         for cut in 0..stream.len() {
             let mut buf: Vec<u8> = Vec::new();
@@ -197,7 +198,7 @@ mod tests {
                     buf = rest;
                 }
             }
-            assert_eq!(names, vec!["A", "B"], "coupé à l'octet {cut}");
+            assert_eq!(names, vec!["A", "B"], "cut at byte {cut}");
         }
     }
 }

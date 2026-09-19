@@ -1,10 +1,10 @@
-//! Suivi des matchs Rocket League : le jeu n'a pas d'API joueur publique, donc
-//! le client de bureau lit la socket de statistiques qu'il ouvre en local et
-//! n'en rapporte qu'un résumé.
+//! Rocket League match tracking: the game has no public player API, so the
+//! desktop client reads the stats socket the game opens locally and reports
+//! nothing but a summary of it.
 //!
-//! Ce qui NE quitte JAMAIS cette machine, par conception : le nom des autres
-//! joueurs du match, coéquipiers comme adversaires. Le flux les porte tous. Le
-//! client s'en sert pour calculer, puis n'émet que des faits sur le membre.
+//! What NEVER leaves this machine, by design: the names of the other players in
+//! the match, team-mates and opponents alike. The stream carries them all. The
+//! client uses them to compute, then emits nothing but facts about the member.
 
 pub mod config;
 pub mod frames;
@@ -15,19 +15,19 @@ pub mod socket;
 
 use serde_json::{json, Value};
 
-/// Le slug du catalogue, vérifié en base de production le 2026-09-16.
+/// The catalogue slug, checked against the production database on 2026-09-16.
 pub const SLUG: &str = "rocket-league";
 
-/// La charge utile envoyée pour un match, et rien d'autre.
+/// The payload sent for a match, and nothing else.
 ///
-/// Construite en UN seul endroit pour qu'un test puisse épingler exactement ce
-/// qui quitte cette machine. Le flux du jeu porte le nom de tous les joueurs ;
-/// il n'en reste ici que des nombres.
+/// Built in ONE single place so that a test can pin down exactly what leaves
+/// this machine. The game's stream carries every player's name; all that is
+/// left here is numbers.
 pub fn payload(s: &parser::Summary, slug: &str, played_at: chrono::DateTime<chrono::Utc>) -> Value {
     let mut o = serde_json::Map::new();
     o.insert("game_slug".into(), slug.into());
-    // Omise, jamais `null`, quand le jeu n'a pas envoyé de playlist : c'est la
-    // norme pour le vrai protocole, pas une exception.
+    // Omitted, never `null`, when the game sent no playlist: that is the norm
+    // for the real protocol, not an exception.
     if let Some(p) = s.playlist {
         o.insert("playlist".into(), p.into());
     }
@@ -61,11 +61,11 @@ pub fn ended_payload(slug: &str) -> Value {
     json!({ "game_slug": slug, "ended": true })
 }
 
-/// L'état diffusé pendant le match, et rien d'autre.
+/// The state broadcast during the match, and nothing else.
 ///
-/// Jamais mis en file, jamais rejoué, jamais écrit. Il ne nomme personne : le
-/// fait qu'il ne soit pas stocké ne rendrait pas acceptable de diffuser le
-/// pseudonyme d'un adversaire à toute la guilde.
+/// Never queued, never replayed, never written. It names nobody: the fact that
+/// it is not stored would not make it acceptable to broadcast an opponent's
+/// player name to the whole guild.
 pub fn live_payload(l: &parser::Live, slug: &str) -> Value {
     json!({
         "game_slug": slug,
@@ -82,11 +82,11 @@ pub fn live_payload(l: &parser::Live, slug: &str) -> Value {
     })
 }
 
-/// Les serveurs auxquels un match doit être adressé.
+/// The servers a match must be addressed to.
 ///
-/// Reprise mot pour mot de `hs::targets`, pour la même raison : un serveur dont
-/// le catalogue ignore le jeu répondrait `unknown_game`, et un serveur que le
-/// membre a mis hors ligne n'a aucune session pour vider sa file.
+/// Taken word for word from `hs::targets`, for the same reason: a server whose
+/// catalogue does not know the game would answer `unknown_game`, and a server
+/// the member has taken offline has no session to drain its queue.
 fn targets(
     servers: &[(String, String)],
     catalog: &[(String, String)],
@@ -106,17 +106,17 @@ fn targets(
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-/// Vrai tant qu'aucun fil de suivi ne doit tourner. Un seul drapeau suffit : le
-/// jeu tourne au plus une fois, et le scanner ne signale jamais deux démarrages
-/// sans un arrêt entre les deux.
+/// True for as long as no watcher thread should be running. A single flag is
+/// enough: the game runs at most once, and the scanner never reports two starts
+/// without a stop in between.
 static STOP: AtomicBool = AtomicBool::new(true);
 
-/// À quelle cadence au plus l'état du direct est publié.
+/// How often, at most, the live state is published.
 const LIVE_EVERY: std::time::Duration = std::time::Duration::from_millis(500);
 
-/// Le dossier d'installation : le réglage manuel du membre gagne, sinon le
-/// process en cours nous le dit, sinon un emplacement courant, et la réponse
-/// est retenue.
+/// The install directory: the member's manual setting wins, otherwise the
+/// running process tells us, otherwise a common location, and the answer is
+/// remembered.
 pub fn installed_dir(db: &crate::db::Db) -> Option<std::path::PathBuf> {
     if let Some(manual) = db.get_setting("rl_install_dir") {
         return Some(std::path::PathBuf::from(manual));
@@ -126,28 +126,28 @@ pub fn installed_dir(db: &crate::db::Db) -> Option<std::path::PathBuf> {
     Some(found)
 }
 
-/// Demande au fil de suivi de s'arrêter.
+/// Asks the watcher thread to stop.
 pub fn stop_watching() {
     STOP.store(true, Ordering::SeqCst);
 }
 
-/// Si un fil de suivi tourne en ce moment.
+/// Whether a watcher thread is running right now.
 pub fn is_watching() -> bool {
     !STOP.load(Ordering::SeqCst)
 }
 
-/// Si ce fil est effectivement connecté à la socket du jeu.
+/// Whether that thread is actually connected to the game's socket.
 pub fn is_socket_connected() -> bool {
     socket::connected()
 }
 
-/// Combien de messages du jeu ont été décodés.
+/// How many messages from the game have been decoded.
 pub fn decoded_messages() -> u64 {
     socket::decoded()
 }
 
-/// Commence à suivre la socket, sauf si le membre n'a pas activé le suivi ou
-/// n'a pas déclaré son pseudo.
+/// Starts following the socket, unless the member has not turned tracking on
+/// or has not declared his player name.
 pub fn start_watching(
     db: Arc<crate::db::Db>,
     notify: Arc<tokio::sync::Notify>,
@@ -171,15 +171,15 @@ pub fn start_watching(
         .map(|c| config::port_in(&c))
         .unwrap_or(config::DEFAULT_PORT);
 
-    // swap rend la valeur PRÉCÉDENTE : true veut dire qu'on était arrêté, donc
-    // on démarre.
+    // swap returns the PREVIOUS value: true means we were stopped, so we are
+    // the ones starting.
     if !STOP.swap(false, Ordering::SeqCst) {
         return;
     }
 
-    // On ne journalise jamais le pseudo lui-même : c'est le pseudonyme du
-    // membre, il n'a rien à faire dans un fichier de journal. Seulement le
-    // fait qu'il soit réglé, et sa longueur.
+    // The player name itself is never logged: it is the member's own handle,
+    // and it has no business being in a log file. Only the fact that it is set,
+    // and its length.
     let name_or_placeholder = format!("name set ({} chars)", name.trim().chars().count());
     log::info!(
         "rl: tracking {} on port {} (config: {})",
@@ -201,9 +201,9 @@ pub fn start_watching(
             socket::Event::Open => {
                 gate.opened();
                 if current.is_none() {
-                    // Lu à chaque match, pas une fois par lancement du jeu : un
-                    // pseudo corrigé pendant la partie s'applique au match
-                    // SUIVANT, pas au prochain lancement.
+                    // Read for every match, not once per game launch: a player
+                    // name fixed mid-session applies to the NEXT match, not to
+                    // the next launch.
                     let name = db.get_setting("rl_player_name").unwrap_or_default();
                     current = Some(parser::Match::new(&name));
                     started_at = std::time::Instant::now();
@@ -244,8 +244,8 @@ pub fn start_watching(
                 let _ = live.send(Some(env.to_string()));
                 let Some(m) = current.take() else { return };
 
-                // Le même GUID deux fois veut dire que le jeu a renvoyé la fin
-                // d'un match déjà traité.
+                // The same GUID twice means the game sent again the end of a
+                // match that has already been handled.
                 if m.guid().is_some() && m.guid() == last_guid {
                     return;
                 }
@@ -255,11 +255,11 @@ pub fn start_watching(
                 let names = m.names_seen();
                 let summary = match m.finish(seconds) {
                     Ok(summary) => summary,
-                    // Le seul cas où le pseudo réglé peut vraiment être en
-                    // cause : il ne correspond à personne dans la feuille.
-                    // On écrit les noms vus dans le journal LOCAL, qui ne
-                    // quitte pas cette machine, pour que le membre se corrige
-                    // tout seul. Sans cela il ne verrait qu'un silence.
+                    // The only case where the configured name can really be to
+                    // blame: it matches nobody on the scoresheet. We write the
+                    // names seen to the LOCAL log, which does not leave this
+                    // machine, so the member can fix it himself. Without that
+                    // he would see nothing but silence.
                     Err(parser::Refusal::MemberNotFound) => {
                         log::info!(
                             "rl: a match went unreported, the summary was incomplete \
@@ -274,18 +274,18 @@ pub fn start_watching(
                                  Names in that match: {}. Set yours in the settings.",
                                 names.join(", ")
                             );
-                            // Écrit là où le membre regarde vraiment. Une ligne
-                            // de journal ne sert à rien : personne n'ouvre un
-                            // fichier de journal. L'écran de réglages, si.
+                            // Written where the member actually looks. A log
+                            // line is no use: nobody opens a log file. The
+                            // settings screen, they do.
                             db.set_setting("rl_last_mismatch", &names.join(", "));
                         }
                         return;
                     }
-                    // Toute autre raison : le membre a bien été trouvé, donc
-                    // son pseudo est le bon. Afficher l'avertissement de pseudo
-                    // ici mentirait. On journalise la vraie raison, et on
-                    // efface un avertissement qui pourrait dater d'un match
-                    // précédent : il ne le concerne plus.
+                    // Any other reason: the member WAS found, so his player
+                    // name is the right one. Showing the player-name warning
+                    // here would be a lie. We log the real reason, and we clear
+                    // a warning that might date from an earlier match: it no
+                    // longer concerns him.
                     Err(other) => {
                         log::info!(
                             "rl: a match went unreported, the summary was incomplete \
@@ -299,12 +299,12 @@ pub fn start_watching(
                     }
                 };
 
-                // Le résumé a été produit, donc le pseudo réglé a bien trouvé
-                // son joueur : l'avertissement n'a plus lieu d'être. On l'efface
-                // ICI, avant toute question de destinataire. L'effacer plus bas
-                // le laisserait affiché quand aucun serveur n'est éligible, et
-                // le membre verrait l'écran continuer de l'accuser alors qu'il
-                // a fait exactement ce qu'on lui demandait.
+                // The summary was produced, so the configured player name did
+                // find its player: the warning has no reason to stand. We clear
+                // it HERE, before any question of who the recipients are.
+                // Clearing it further down would leave it on screen whenever no
+                // server is eligible, and the member would watch the screen go
+                // on accusing him when he had done exactly what was asked.
                 db.set_setting("rl_last_mismatch", "");
 
                 let played_at = chrono::Utc::now();
@@ -355,10 +355,10 @@ mod tests {
 
     #[test]
     fn la_fin_dun_match_ne_porte_que_le_jeu_et_le_drapeau() {
-        // Ce message part vers tous les membres de la guilde : il ne doit rien
-        // porter d'autre, et surtout aucun reliquat du match qui vient de finir.
+        // This message goes out to every member of the guild: it must carry
+        // nothing else, and above all no leftover of the match that just ended.
         let p = ended_payload(SLUG);
-        let o = p.as_object().expect("un objet");
+        let o = p.as_object().expect("an object");
         let mut keys: Vec<&str> = o.keys().map(String::as_str).collect();
         keys.sort();
         assert_eq!(keys, vec!["ended", "game_slug"]);
@@ -394,8 +394,8 @@ mod tests {
 
     #[test]
     fn the_payload_carries_exactly_the_sixteen_allowed_fields_when_a_playlist_is_present() {
-        // Épingle le jeu complet quand le résumé porte une playlist (le jour
-        // où Psyonix l'ajouterait, ou dans les tests qui la fixent).
+        // Pins down the whole set when the summary carries a playlist (the day
+        // Psyonix adds one, or in the tests that set it).
         let v = payload(&a_summary(), SLUG, at());
         let o = v.as_object().unwrap();
         let mut keys: Vec<&str> = o.keys().map(String::as_str).collect();
@@ -425,10 +425,10 @@ mod tests {
 
     #[test]
     fn the_payload_omits_playlist_entirely_when_the_game_never_sent_one() {
-        // C'est la norme, pas l'exception : le vrai protocole n'a pas de champ
-        // Playlist. La clé doit être ABSENTE, jamais envoyée comme `null` :
-        // c'est le même ensemble que le test ci-dessus, moins "playlist", pas
-        // un "au plus" qui laisserait passer n'importe quoi d'autre.
+        // This is the norm, not the exception: the real protocol has no
+        // Playlist field. The key must be ABSENT, never sent as `null`: it is
+        // the same set as the test above, minus "playlist", not an "at most"
+        // that would let anything else through.
         let mut s = a_summary();
         s.playlist = None;
         let v = payload(&s, SLUG, at());
@@ -460,11 +460,11 @@ mod tests {
 
     #[test]
     fn the_payload_can_never_carry_a_name() {
-        // Le flux du jeu porte le nom de TOUS les joueurs du match. Aucun ne
-        // doit apparaître ici, jamais.
+        // The game's stream carries the names of ALL the players in the match.
+        // None of them may ever appear here.
         let raw = payload(&a_summary(), SLUG, at()).to_string();
         for forbidden in ["Name", "Bushido", "Players", "PlayerName"] {
-            assert!(!raw.contains(forbidden), "{forbidden} a fuité dans {raw}");
+            assert!(!raw.contains(forbidden), "{forbidden} leaked into {raw}");
         }
     }
 
@@ -509,12 +509,12 @@ mod tests {
         let v = payload(&a_summary(), SLUG, at());
         let s = v["played_at"].as_str().unwrap();
         let parsed = chrono::DateTime::parse_from_rfc3339(s).expect("RFC 3339");
-        assert_eq!(parsed.offset().local_minus_utc(), 0, "doit partir en UTC");
+        assert_eq!(parsed.offset().local_minus_utc(), 0, "must go out in UTC");
     }
 
     #[test]
     fn the_slug_is_the_one_the_server_knows() {
-        // Vérifié en base de production le 2026-09-16.
+        // Checked against the production database on 2026-09-16.
         assert_eq!(SLUG, "rocket-league");
     }
 }

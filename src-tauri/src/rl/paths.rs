@@ -1,17 +1,17 @@
-//! Où Rocket League vit sur cette machine, et où il lit sa configuration.
+//! Where Rocket League lives on this machine, and where it reads its config.
 //!
-//! Contrairement à Hearthstone, dont le fichier de configuration vit dans
-//! LOCALAPPDATA, celui-ci vit DANS le dossier d'installation. On ne peut donc
-//! rien écrire tant qu'on n'a pas trouvé l'installation.
+//! Unlike Hearthstone, whose configuration file lives in LOCALAPPDATA, this one
+//! lives INSIDE the install directory. So nothing can be written until the
+//! installation has been found.
 
 use std::path::PathBuf;
 
-/// L'exécutable du jeu, tel que le scanner le voit.
+/// The game's executable, as the scanner sees it.
 pub const EXE: &str = "RocketLeague.exe";
 
-/// Les emplacements d'installation courants, repris de `ke-rl-tracker` où ils
-/// sont éprouvés en production. Sondés seulement si le process n'est pas là
-/// pour nous dire la vérité.
+/// The common install locations, taken from `ke-rl-tracker` where they are
+/// proven in production. Only probed when the process is not there to tell us
+/// the truth.
 pub const COMMON_DIRS: &[&str] = &[
     r"C:\Program Files (x86)\Steam\steamapps\common\rocketleague",
     r"C:\Program Files\Steam\steamapps\common\rocketleague",
@@ -19,23 +19,22 @@ pub const COMMON_DIRS: &[&str] = &[
     r"C:\Program Files (x86)\Epic Games\rocketleague",
 ];
 
-/// Découpe le dernier élément d'un chemin, en traitant `/` ET `\` comme des
-/// séparateurs, quelle que soit la plateforme hôte.
+/// Strips the last element off a path, treating `/` AND `\` as separators,
+/// whatever the host platform.
 ///
-/// Un chemin Windows relevé sur la machine d'un membre garde les séparateurs de
-/// cette machine. Confié à `std::path::Path` sur Linux, notre CI et cette
-/// machine de développement, il ne serait pas découpé du tout, puisqu'Unix voit
-/// `\` comme un caractère ordinaire. Même raison et même remède que dans
-/// `hs/paths.rs`.
+/// A Windows path picked up on a member's machine keeps that machine's
+/// separators. Handed to `std::path::Path` on Linux, which is our CI and this
+/// development machine, it would not be split at all, since Unix sees `\` as an
+/// ordinary character. Same reason and same remedy as in `hs/paths.rs`.
 fn parent_str(s: &str) -> Option<&str> {
     let idx = s.rfind(['/', '\\'])?;
     Some(&s[..idx])
 }
 
-/// Le dossier d'installation qui contient cet exécutable.
+/// The install directory that holds this executable.
 ///
-/// Le jeu tourne depuis `<install>/Binaries/Win64/RocketLeague.exe`, donc
-/// l'installation est trois crans au-dessus.
+/// The game runs from `<install>/Binaries/Win64/RocketLeague.exe`, so the
+/// installation is three levels above it.
 pub fn install_dir_of(exe: &str) -> Option<String> {
     let win64 = parent_str(exe)?;
     let binaries = parent_str(win64)?;
@@ -46,16 +45,16 @@ pub fn install_dir_of(exe: &str) -> Option<String> {
     Some(install.to_string())
 }
 
-/// Le fichier de configuration à l'intérieur d'un dossier d'installation.
+/// The configuration file inside an install directory.
 ///
-/// Le séparateur du dossier est conservé : on ne mélange pas les styles dans un
-/// chemin qu'on va rendre au membre pour qu'il le reconnaisse.
+/// The directory's separator is kept: we do not mix styles in a path we are
+/// going to show the member for him to recognise.
 pub fn config_path_in(install: &str) -> String {
     let sep = if install.contains('\\') { '\\' } else { '/' };
     format!("{install}{sep}TAGame{sep}Config{sep}DefaultStatsAPI.ini")
 }
 
-/// Le dossier d'installation déduit du process en cours, s'il tourne.
+/// The install directory worked out from the running process, if it is up.
 pub fn running_install_dir() -> Option<PathBuf> {
     use sysinfo::{ProcessRefreshKind, RefreshKind, System, UpdateKind};
     let sys = System::new_with_specifics(
@@ -71,7 +70,7 @@ pub fn running_install_dir() -> Option<PathBuf> {
     None
 }
 
-/// Le premier emplacement courant qui existe réellement.
+/// The first common location that really exists.
 pub fn common_install_dir() -> Option<PathBuf> {
     COMMON_DIRS.iter().map(PathBuf::from).find(|d| d.is_dir())
 }
@@ -82,7 +81,7 @@ mod tests {
 
     #[test]
     fn the_install_dir_is_three_levels_above_the_executable() {
-        // Le jeu tourne depuis <install>/Binaries/Win64/RocketLeague.exe
+        // The game runs from <install>/Binaries/Win64/RocketLeague.exe
         let exe = r"C:\Program Files (x86)\Steam\steamapps\common\rocketleague\Binaries\Win64\RocketLeague.exe";
         assert_eq!(
             install_dir_of(exe).as_deref(),
@@ -92,7 +91,7 @@ mod tests {
 
     #[test]
     fn a_windows_path_is_split_on_backslashes_even_on_unix() {
-        // Ce test tourne sur Linux en CI. Path::parent n'y découperait rien.
+        // This test runs on Linux in CI. Path::parent would split nothing there.
         let exe = r"D:\Games\rocketleague\Binaries\Win64\RocketLeague.exe";
         assert_eq!(
             install_dir_of(exe).as_deref(),
