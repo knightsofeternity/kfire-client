@@ -144,7 +144,9 @@ impl Parser {
             turn,
             // Constructed has no leaderboard, so a placement read there can
             // only be noise; the server refuses a constructed match with one.
-            placement: (mode == "battlegrounds").then_some(g.placement).flatten(),
+            placement: (mode == "battlegrounds")
+                .then_some(g.reported_placement())
+                .flatten(),
             mode,
         })
     }
@@ -250,6 +252,21 @@ impl Game {
         }
     }
 
+    /// The member's position, with the one correction Battlegrounds needs.
+    ///
+    /// PLAYER_LEADERBOARD_PLACE only moves as opponents die, and the game never
+    /// emits 1 for the last player standing: the winner's log stops at 2, which
+    /// is how a top 1 was recorded as a second place. Winning a Battlegrounds
+    /// lobby IS first place, by definition, so the result settles the position.
+    /// PLAYSTATE=WON is only ever written for a real win, so this cannot turn a
+    /// top 2 into a top 1.
+    fn reported_placement(&self) -> Option<i64> {
+        if self.mode.as_deref() == Some("battlegrounds") && self.result.as_deref() == Some("win") {
+            return Some(1);
+        }
+        self.placement
+    }
+
     /// The match, once every mandatory field has been read.
     fn finish(&self) -> Option<Match> {
         let hero = self
@@ -261,7 +278,7 @@ impl Game {
             mode: self.mode.clone()?,
             result: self.result.clone()?,
             turns: self.turns,
-            placement: self.placement,
+            placement: self.reported_placement(),
             hero_card_id: hero,
             ended_at: self.ended_at?,
         })
@@ -411,6 +428,29 @@ D 17:44:59.4684646 GameState.DebugPrintPower() - TAG_CHANGE Entity=TestPlayer#12
     }
 
     #[test]
+    fn une_victoire_en_champs_de_bataille_est_une_premiere_place() {
+        // PLAYER_LEADERBOARD_PLACE follows the opponents dying and the game
+        // never emits 1 for the winner, so the log stops at 2. Winning the
+        // lobby IS first place, so the win settles the position.
+        let src = BG_GAME
+            .replace("tag=PLAYSTATE value=LOST", "tag=PLAYSTATE value=WON")
+            .replace(
+                "tag=PLAYER_LEADERBOARD_PLACE value=5",
+                "tag=PLAYER_LEADERBOARD_PLACE value=2",
+            );
+        let m = parse_one(&src);
+        assert_eq!(m.result, "win");
+        assert_eq!(m.placement, Some(1));
+    }
+
+    #[test]
+    fn une_defaite_garde_la_position_du_journal() {
+        let m = parse_one(BG_GAME);
+        assert_eq!(m.result, "loss");
+        assert_eq!(m.placement, Some(5));
+    }
+
+    #[test]
     fn a_constructed_game_has_no_placement() {
         let src = BG_GAME
             .replace("GT_BATTLEGROUNDS", "GT_RANKED")
@@ -521,6 +561,30 @@ D 17:44:59.4684646 GameState.DebugPrintPower() - TAG_CHANGE Entity=TestPlayer#12
         // And it follows the match forward.
         p.push(until(BG_GAME, "tag=PLAYSTATE").into_iter());
         assert_eq!(p.live().expect("une partie en cours").turn, 18);
+    }
+
+    #[test]
+    fn letat_en_direct_dune_victoire_annonce_la_premiere_place() {
+        // Same correction as the summary: the live card must not show a second
+        // place on a lobby the member has just won.
+        let src = BG_GAME.replace("tag=PLAYSTATE value=LOST", "tag=PLAYSTATE value=WON");
+        let mut p = Parser::new();
+        // Everything but the very last line, so the game is read but not yet
+        // emitted: `live` gives way to the end-of-match message once it is.
+        let lines: Vec<&str> = src.lines().collect();
+        p.push(lines[..lines.len() - 1].iter().copied());
+        assert_eq!(p.live().expect("une partie en cours").placement, Some(5));
+        let mut g = Game {
+            mode: Some("battlegrounds".to_string()),
+            result: Some("win".to_string()),
+            turns: Some(18),
+            placement: Some(2),
+            ..Default::default()
+        };
+        g.emitted = false;
+        let mut p2 = Parser::new();
+        p2.cur = Some(g);
+        assert_eq!(p2.live().expect("une partie en cours").placement, Some(1));
     }
 
     #[test]
