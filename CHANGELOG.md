@@ -7,6 +7,66 @@ Release, so every version MUST have its own section here before it is tagged.
 The release build fails when one is missing, which is deliberate: publishing a
 version under the previous one's notes has already happened once.
 
+## 0.6.0
+
+Coming from 0.5.0, which added Hearthstone match recording, this version brings
+two things: Rocket League, and a live view of what the guild is playing right
+now.
+
+### Rocket League matches
+
+KFIRE records your Rocket League matches. The game has no player API, so the
+client reads the statistics socket the game opens on your own machine, and sends
+nothing but a summary: the result, both team scores, and your own goals,
+assists, saves, shots, score and demolitions.
+
+The game only opens that socket if it is told to, so the client writes one block
+into a file in the install directory. It shows you the exact path and the exact
+contents before you agree, and turning tracking off takes the block back out.
+**The game only reads that file when it starts**, so restart Rocket League after
+enabling it.
+
+Rocket League does not say which player in a match is you, so you type your
+in-game name in the settings. That name never leaves your machine: it only picks
+your row out of the scoresheet. If it matches nobody, the settings screen lists
+the names the game actually used, so you can copy the right one.
+
+### Your game in progress, on the portal
+
+The portal has a **Live games** page showing what the guild is playing right
+now, and this version feeds it for three games.
+
+**Rocket League**: both scores, the clock, and your own statistics, refreshed
+twice a second.
+
+**Hearthstone**: the mode, the current turn, and your placement in Battlegrounds.
+It refreshes every five seconds, which is how often the game's log is re-read.
+
+**League of Legends**: your champion, level, KDA, creep score, gold and game
+time, read from the API the game opens on your own computer while you play.
+**Nothing to configure** for this one: the game says which player you are, so
+there is no name to type. Turn it on in the settings.
+
+None of this is ever stored. It is broadcast while you play and forgotten.
+
+### What never leaves your machine
+
+The same rule as Hearthstone in 0.5.0, now across four games.
+
+Rocket League's scoresheet names every team-mate and opponent. League's API names
+all ten players, with their teams and items. Hearthstone's log carries your
+opponent's name and every card played. **None of it leaves your computer**, not
+even to be displayed, and the server has no column able to hold a name.
+
+Your own name does not leave either. It is used locally, and only to find your
+own row.
+
+Each game carries a test that pins the exact list of fields allowed out, so that
+list cannot grow by accident.
+
+Rocket League and Hearthstone are Windows and macOS only, neither having a
+native Linux client.
+
 ## 0.6.0-beta.5
 
 **Still a beta of 0.6.0.** Published as a pre-release, so the update indicator
