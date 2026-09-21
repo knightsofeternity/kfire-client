@@ -10,7 +10,7 @@ version under the previous one's notes has already happened once.
 ## 0.6.1
 
 Two corrections on Hearthstone, both reported by a beta tester and both visible
-on the guild portal.
+on the portal.
 
 ### The number of turns was doubled
 
@@ -20,9 +20,13 @@ itself, which in Battlegrounds ticks once for the recruit phase and once for
 the combat: exactly twice the turn you see on screen. It now reads the counter
 carried by your own player, which is the turn you played.
 
-The nine games already stored on the guild's server were halved by hand, so the
-history is right too. If Hearthstone never writes that counter, a match is now
-sent with no turn count at all rather than with a doubled one.
+Matches already recorded keep the doubled number they were sent with: a client
+cannot reach back into a server's history. An admin who wants the past corrected
+can halve the turn count of past Battlegrounds rows, which is exact rather than
+approximate since the old value was always exactly twice the real one.
+
+If Hearthstone never writes that counter, a match is now sent with no turn count
+at all rather than with a doubled one.
 
 ### Winning a Battlegrounds lobby was recorded as a second place
 
@@ -30,8 +34,8 @@ A top 1 came out as a top 2. Hearthstone only writes your leaderboard position
 when an opponent dies, and never writes a 1 for the last player standing, so
 the last position the log held was 2. A won Battlegrounds lobby is a first
 place by definition, so a win is now recorded as first, live and at the end of
-the match. Any other finish keeps the position the game gives. The one game
-already stored was corrected on the server.
+the match. Any other finish keeps the position the game gives. Battlegrounds wins
+already stored keep their wrong position until an admin corrects them.
 
 ## 0.6.0
 
