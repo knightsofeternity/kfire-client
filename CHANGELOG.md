@@ -7,6 +7,32 @@ Release, so every version MUST have its own section here before it is tagged.
 The release build fails when one is missing, which is deliberate: publishing a
 version under the previous one's notes has already happened once.
 
+## 0.6.1
+
+Two corrections on Hearthstone, both reported by a beta tester and both visible
+on the guild portal.
+
+### The number of turns was doubled
+
+A Battlegrounds game that stopped at turn 18 was recorded, and shown live, as
+36 turns. The client was reading the counter Hearthstone keeps on the game
+itself, which in Battlegrounds ticks once for the recruit phase and once for
+the combat: exactly twice the turn you see on screen. It now reads the counter
+carried by your own player, which is the turn you played.
+
+The nine games already stored on the guild's server were halved by hand, so the
+history is right too. If Hearthstone never writes that counter, a match is now
+sent with no turn count at all rather than with a doubled one.
+
+### Winning a Battlegrounds lobby was recorded as a second place
+
+A top 1 came out as a top 2. Hearthstone only writes your leaderboard position
+when an opponent dies, and never writes a 1 for the last player standing, so
+the last position the log held was 2. A won Battlegrounds lobby is a first
+place by definition, so a win is now recorded as first, live and at the end of
+the match. Any other finish keeps the position the game gives. The one game
+already stored was corrected on the server.
+
 ## 0.6.0
 
 Coming from 0.5.0, which added Hearthstone match recording, this version brings
