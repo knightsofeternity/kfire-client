@@ -144,7 +144,9 @@ impl Parser {
             turn,
             // Constructed has no leaderboard, so a placement read there can
             // only be noise; the server refuses a constructed match with one.
-            placement: (mode == "battlegrounds").then_some(g.placement).flatten(),
+            placement: (mode == "battlegrounds")
+                .then_some(g.reported_placement())
+                .flatten(),
             mode,
         })
     }
@@ -222,9 +224,16 @@ impl Game {
                 }
             }
         }
-        // Turns come from the game itself; a player entity carries a smaller
-        // counter that is NOT the number of turns played.
-        if line.contains("Entity=GameEntity tag=TURN value=") {
+        // The turn is the one the MEMBER sees, and only his own entity carries
+        // it. GameEntity counts phases, not turns: in Battlegrounds it ticks
+        // once for the recruit phase and once for the combat, so it runs at
+        // exactly twice the visible turn. A beta tester who stopped at turn 18
+        // was reported at 36, and his log shows GameEntity at 36 against 18 on
+        // his own entity.
+        //
+        // Other player entities carry the same counter, Bob le barman included,
+        // so "not GameEntity" is not enough: it has to be the member's.
+        if line.contains(&mine) {
             if let Some(v) = field(line, "tag=TURN value=").and_then(|v| v.parse().ok()) {
                 self.turns = Some(self.turns.unwrap_or(0).max(v));
             }
@@ -243,6 +252,21 @@ impl Game {
         }
     }
 
+    /// The member's position, with the one correction Battlegrounds needs.
+    ///
+    /// PLAYER_LEADERBOARD_PLACE only moves as opponents die, and the game never
+    /// emits 1 for the last player standing: the winner's log stops at 2, which
+    /// is how a top 1 was recorded as a second place. Winning a Battlegrounds
+    /// lobby IS first place, by definition, so the result settles the position.
+    /// PLAYSTATE=WON is only ever written for a real win, so this cannot turn a
+    /// top 2 into a top 1.
+    fn reported_placement(&self) -> Option<i64> {
+        if self.mode.as_deref() == Some("battlegrounds") && self.result.as_deref() == Some("win") {
+            return Some(1);
+        }
+        self.placement
+    }
+
     /// The match, once every mandatory field has been read.
     fn finish(&self) -> Option<Match> {
         let hero = self
@@ -254,7 +278,7 @@ impl Game {
             mode: self.mode.clone()?,
             result: self.result.clone()?,
             turns: self.turns,
-            placement: self.placement,
+            placement: self.reported_placement(),
             hero_card_id: hero,
             ended_at: self.ended_at?,
         })
@@ -303,7 +327,9 @@ D 17:24:32.6289894 GameState.DebugPrintPower() -     TAG_CHANGE Entity=TestPlaye
 D 17:24:13.8338107 GameState.DebugPrintPower() -     FULL_ENTITY - Creating ID=95 CardID=BG28_HERO_400
 D 17:39:34.5976165 GameState.DebugPrintPower() - TAG_CHANGE Entity=[entityName=Herosnom id=95 zone=PLAY zonePos=0 cardId=BG28_HERO_400 player=7] tag=PLAYER_LEADERBOARD_PLACE value=2
 D 17:42:15.2856843 GameState.DebugPrintPower() - TAG_CHANGE Entity=[entityName=Herosnom id=95 zone=PLAY zonePos=0 cardId=BG28_HERO_400 player=7] tag=PLAYER_LEADERBOARD_PLACE value=5
-D 17:44:00.0000000 GameState.DebugPrintPower() -     TAG_CHANGE Entity=GameEntity tag=TURN value=22
+D 17:44:00.0000000 GameState.DebugPrintPower() -     TAG_CHANGE Entity=GameEntity tag=TURN value=36
+D 17:44:00.0000000 GameState.DebugPrintPower() -     TAG_CHANGE Entity=TestPlayer#1234 tag=TURN value=18
+D 17:44:00.0000000 GameState.DebugPrintPower() -     TAG_CHANGE Entity=Bob le barman tag=TURN value=18
 D 17:44:59.4684646 GameState.DebugPrintPower() - TAG_CHANGE Entity=TestPlayer#1234 tag=PLAYSTATE value=LOST
 "#;
 
@@ -318,7 +344,7 @@ D 17:44:59.4684646 GameState.DebugPrintPower() - TAG_CHANGE Entity=TestPlayer#12
         let m = parse_one(BG_GAME);
         assert_eq!(m.mode, "battlegrounds");
         assert_eq!(m.result, "loss");
-        assert_eq!(m.turns, Some(22));
+        assert_eq!(m.turns, Some(18));
         assert_eq!(m.placement, Some(5));
         assert_eq!(m.hero_card_id.as_deref(), Some("BG28_HERO_400"));
     }
@@ -364,13 +390,64 @@ D 17:44:59.4684646 GameState.DebugPrintPower() - TAG_CHANGE Entity=TestPlayer#12
     }
 
     #[test]
-    fn turns_come_from_the_game_entity_not_a_player() {
-        // A player entity carries its own smaller counter, which is not the
-        // number of turns played.
-        let src = format!(
-            "{BG_GAME}D 17:44:00.0000000 GameState.DebugPrintPower() - TAG_CHANGE Entity=TestPlayer#1234 tag=TURN value=11\n"
-        );
-        assert_eq!(parse_one(&src).turns, Some(22));
+    fn le_tour_vient_de_lentite_du_membre_pas_de_gameentity() {
+        // This test used to claim the opposite, and pinned the bug: a beta
+        // tester who played 18 turns was reported as having played 36. In
+        // Battlegrounds GameEntity counts every phase, recruit then combat, so
+        // it runs at exactly twice the turn the member sees. The counter on the
+        // member's own entity is that visible turn.
+        let m = parse_one(BG_GAME);
+        assert_eq!(m.turns, Some(18));
+    }
+
+    #[test]
+    fn lentite_dun_autre_joueur_ne_donne_jamais_le_tour() {
+        // Bob le barman is a player entity too, so "anything but GameEntity"
+        // would be enough to pick him up. Only the member's entity counts.
+        let src = BG_GAME
+            .lines()
+            .filter(|l| !l.contains("Entity=TestPlayer#1234 tag=TURN"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_eq!(parse_one(&src).turns, None);
+    }
+
+    #[test]
+    fn sans_compteur_du_membre_aucun_tour_nest_annonce() {
+        // Falling back on GameEntity would announce double the real turn, which
+        // is worse than announcing nothing: the guild would read a number that
+        // never happened. A missing turn simply drops the field.
+        let src = BG_GAME
+            .lines()
+            .filter(|l| !l.contains("tag=TURN value=18"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let m = parse_one(&src);
+        assert_eq!(m.turns, None);
+        assert_eq!(m.result, "loss");
+    }
+
+    #[test]
+    fn une_victoire_en_champs_de_bataille_est_une_premiere_place() {
+        // PLAYER_LEADERBOARD_PLACE follows the opponents dying and the game
+        // never emits 1 for the winner, so the log stops at 2. Winning the
+        // lobby IS first place, so the win settles the position.
+        let src = BG_GAME
+            .replace("tag=PLAYSTATE value=LOST", "tag=PLAYSTATE value=WON")
+            .replace(
+                "tag=PLAYER_LEADERBOARD_PLACE value=5",
+                "tag=PLAYER_LEADERBOARD_PLACE value=2",
+            );
+        let m = parse_one(&src);
+        assert_eq!(m.result, "win");
+        assert_eq!(m.placement, Some(1));
+    }
+
+    #[test]
+    fn une_defaite_garde_la_position_du_journal() {
+        let m = parse_one(BG_GAME);
+        assert_eq!(m.result, "loss");
+        assert_eq!(m.placement, Some(5));
     }
 
     #[test]
@@ -450,7 +527,7 @@ D 17:44:59.4684646 GameState.DebugPrintPower() - TAG_CHANGE Entity=TestPlayer#12
             .is_empty());
         let l = p.live().expect("une partie en cours");
         assert_eq!(l.mode, "battlegrounds");
-        assert_eq!(l.turn, 22);
+        assert_eq!(l.turn, 18);
         assert_eq!(l.placement, Some(5));
     }
 
@@ -472,18 +549,42 @@ D 17:44:59.4684646 GameState.DebugPrintPower() - TAG_CHANGE Entity=TestPlayer#12
 
     #[test]
     fn le_tour_remonte_est_le_tour_en_cours() {
-        // The same GameEntity line as the real log, with its time and turn
-        // moved back: this is what the log holds halfway through the match.
+        // The same member line as the real log, with its time and turn moved
+        // back: this is what the log holds halfway through the match.
         let mut p = Parser::new();
-        p.push(until(BG_GAME, "tag=TURN value=22").into_iter());
+        p.push(until(BG_GAME, "tag=TURN value=36").into_iter());
         p.push(std::iter::once(
-            "D 17:35:00.0000000 GameState.DebugPrintPower() -     TAG_CHANGE Entity=GameEntity tag=TURN value=11",
+            "D 17:35:00.0000000 GameState.DebugPrintPower() -     TAG_CHANGE Entity=TestPlayer#1234 tag=TURN value=9",
         ));
-        assert_eq!(p.live().expect("une partie en cours").turn, 11);
+        assert_eq!(p.live().expect("une partie en cours").turn, 9);
 
         // And it follows the match forward.
         p.push(until(BG_GAME, "tag=PLAYSTATE").into_iter());
-        assert_eq!(p.live().expect("une partie en cours").turn, 22);
+        assert_eq!(p.live().expect("une partie en cours").turn, 18);
+    }
+
+    #[test]
+    fn letat_en_direct_dune_victoire_annonce_la_premiere_place() {
+        // Same correction as the summary: the live card must not show a second
+        // place on a lobby the member has just won.
+        let src = BG_GAME.replace("tag=PLAYSTATE value=LOST", "tag=PLAYSTATE value=WON");
+        let mut p = Parser::new();
+        // Everything but the very last line, so the game is read but not yet
+        // emitted: `live` gives way to the end-of-match message once it is.
+        let lines: Vec<&str> = src.lines().collect();
+        p.push(lines[..lines.len() - 1].iter().copied());
+        assert_eq!(p.live().expect("une partie en cours").placement, Some(5));
+        let mut g = Game {
+            mode: Some("battlegrounds".to_string()),
+            result: Some("win".to_string()),
+            turns: Some(18),
+            placement: Some(2),
+            ..Default::default()
+        };
+        g.emitted = false;
+        let mut p2 = Parser::new();
+        p2.cur = Some(g);
+        assert_eq!(p2.live().expect("une partie en cours").placement, Some(1));
     }
 
     #[test]
@@ -560,9 +661,12 @@ mod real_log {
             games.iter().map(|g| g.placement).collect::<Vec<_>>(),
             vec![Some(5), Some(4), Some(5)]
         );
+        // Halved on 2026-09-21: these were read off GameEntity, which counts
+        // both Battlegrounds phases, so they were twice the turn the member
+        // played. The member's own counter gives the visible turn.
         assert_eq!(
             games.iter().map(|g| g.turns).collect::<Vec<_>>(),
-            vec![Some(22), Some(26), Some(24)]
+            vec![Some(11), Some(13), Some(12)]
         );
         assert_eq!(
             games
