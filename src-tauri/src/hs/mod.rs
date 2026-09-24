@@ -331,8 +331,12 @@ pub fn start_watching(
                 // timer work it out, so the card goes away at once.
                 broadcast(ended_payload(SLUG));
                 let played_at = m.played_at(start);
-                let wants_rating =
-                    hdt_enabled(&db) && m.mode == "battlegrounds" && m.placement.is_some();
+                // No HDT on this machine (uninstalled since the option was
+                // turned on): nothing to wait for, the match goes at once.
+                let wants_rating = hdt_enabled(&db)
+                    && hdt::available()
+                    && m.mode == "battlegrounds"
+                    && m.placement.is_some();
                 if !wants_rating {
                     report(&db, &notify, &m, played_at);
                     return;

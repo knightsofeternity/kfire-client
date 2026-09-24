@@ -8,6 +8,7 @@ export function hsPip(
     supported: boolean;
     enabled: boolean;
     install_dir: string | null;
+    hdt_available?: boolean;
     hdt_enabled?: boolean;
     last_match?: Record<string, unknown> | null;
   } | null,
@@ -15,7 +16,10 @@ export function hsPip(
   if (!s || !s.supported) return "off";
   if (s.enabled) {
     // The member asked for the rating and HDT did not give it: worth a look.
-    return s.hdt_enabled && s.last_match?.rating_missing === true ? "todo" : "on";
+    // Only while HDT is still installed: once it is gone, the tab says so.
+    return s.hdt_available !== false && s.hdt_enabled && s.last_match?.rating_missing === true
+      ? "todo"
+      : "on";
   }
   return s.install_dir ? "off" : "todo";
 }

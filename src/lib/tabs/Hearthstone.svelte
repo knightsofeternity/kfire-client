@@ -9,7 +9,7 @@
 
   const HDT_URL = "https://hsreplay.net/downloads/";
   const base = ["field.mode", "field.result", "field.turns", "field.placement", "field.hero"] as const;
-  const fields = $derived([...base, ...(app.hs?.hdt_enabled ? (["field.rating"] as const) : [])]);
+  const fields = $derived([...base, ...(app.hs?.hdt_available && app.hs.hdt_enabled ? (["field.rating"] as const) : [])]);
 </script>
 
 <GameTab

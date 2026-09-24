@@ -5,6 +5,7 @@ const hs = {
   supported: true,
   enabled: false,
   install_dir: "C:/HS" as string | null,
+  hdt_available: true,
   hdt_enabled: false,
   last_match: null as Record<string, unknown> | null,
 };
@@ -22,6 +23,8 @@ describe("hsPip", () => {
     expect(hsPip({ ...hs, enabled: true, hdt_enabled: true, last_match: { rating_missing: true } })).toBe("todo"));
   it("stays on when the rating was found", () =>
     expect(hsPip({ ...hs, enabled: true, hdt_enabled: true, last_match: { rating_after: 5644 } })).toBe("on"));
+  it("ignores a missing rating when HDT is no longer installed", () =>
+    expect(hsPip({ ...hs, enabled: true, hdt_available: false, hdt_enabled: true, last_match: { rating_missing: true } })).toBe("on"));
   it("ignores a missing rating once HDT reading is off", () =>
     expect(hsPip({ ...hs, enabled: true, hdt_enabled: false, last_match: { rating_missing: true } })).toBe("on"));
 });
