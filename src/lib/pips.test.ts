@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { hsPip, lolPip, rlPip } from "./pips";
 
-const hs = { supported: true, enabled: false, install_dir: "C:/HS" as string | null };
+const hs = {
+  supported: true,
+  enabled: false,
+  install_dir: "C:/HS" as string | null,
+  hdt_enabled: false,
+  last_match: null as Record<string, unknown> | null,
+};
 const rl = { enabled: false, install_dir: "C:/RL" as string | null, player_name: "Djam", last_mismatch: "" };
 
 describe("hsPip", () => {
@@ -12,6 +18,12 @@ describe("hsPip", () => {
   it("is off where Hearthstone does not exist", () =>
     expect(hsPip({ supported: false, enabled: false, install_dir: null })).toBe("off"));
   it("is off while the status is not loaded", () => expect(hsPip(null)).toBe("off"));
+  it("needs setup when HDT reading is on and the last match's rating was not found", () =>
+    expect(hsPip({ ...hs, enabled: true, hdt_enabled: true, last_match: { rating_missing: true } })).toBe("todo"));
+  it("stays on when the rating was found", () =>
+    expect(hsPip({ ...hs, enabled: true, hdt_enabled: true, last_match: { rating_after: 5644 } })).toBe("on"));
+  it("ignores a missing rating once HDT reading is off", () =>
+    expect(hsPip({ ...hs, enabled: true, hdt_enabled: false, last_match: { rating_missing: true } })).toBe("on"));
 });
 
 describe("rlPip", () => {

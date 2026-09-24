@@ -47,6 +47,7 @@ class AppState {
 
   hs = $state<HsStatus | null>(null);
   hsBusy = $state(false);
+  hdtBusy = $state(false);
   hsError = $state("");
   rl = $state<RlStatus | null>(null);
   rlBusy = $state(false);
@@ -148,6 +149,19 @@ class AppState {
       this.hsError = String(e);
     } finally {
       this.hsBusy = false;
+    }
+  }
+
+  async toggleHdt(next: boolean) {
+    this.hdtBusy = true;
+    this.hsError = "";
+    try {
+      await invoke("hs_set_hdt_rating", { enabled: next });
+      await this.loadHs();
+    } catch (e) {
+      this.hsError = String(e);
+    } finally {
+      this.hdtBusy = false;
     }
   }
 
