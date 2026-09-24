@@ -160,6 +160,8 @@ pub struct UiState {
     games_count: i64,
     running: Vec<RunningGame>,
     ignored: Vec<IgnoredGame>,
+    /// Address of the last link the server refused, to pre-fill the form.
+    expired_server_url: Option<String>,
 }
 
 #[derive(serde::Serialize)]
@@ -394,6 +396,7 @@ fn get_state(state: tauri::State<'_, AppState>) -> UiState {
         servers,
         running,
         ignored,
+        expired_server_url: state.db.expired_server_url(),
     }
 }
 

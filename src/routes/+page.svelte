@@ -15,6 +15,7 @@
     games_count: number;
     running: RunningGame[];
     ignored: IgnoredGame[];
+    expired_server_url: string | null;
   };
   type LinkInfo = { user_code: string; verification_url: string };
   type ServerStatus = "disconnected" | "connecting" | "connected" | "logged_out";
@@ -29,6 +30,10 @@
   let autostart = $state(false);
 
   let serverUrl = $state("");
+  // Address of a link the server refused: offered back once, not forced on
+  // every 4 s refresh (the member may want to type another one).
+  let expiredUrl = $state<string | null>(null);
+  let expiredPrefilled = false;
   let error = $state("");
   let linking = $state(false);
   let adding = $state(false);
@@ -209,6 +214,11 @@
     gamesCount = s.games_count;
     running = s.running;
     ignored = s.ignored;
+    expiredUrl = s.expired_server_url;
+    if (expiredUrl && servers.length === 0 && !serverUrl && !expiredPrefilled) {
+      serverUrl = expiredUrl;
+      expiredPrefilled = true;
+    }
     if (servers.length > 0) refreshAutostart();
     // Drop status entries for servers that no longer exist.
     const ids = new Set(servers.map((x) => x.id));
@@ -356,7 +366,13 @@
     </section>
   {:else if servers.length === 0}
     <form onsubmit={startLink}>
-      <p class="muted">Connect this app to your organization's KFIRE server.</p>
+      {#if expiredUrl}
+        <p class="error">
+          Your session on {expiredUrl} expired. Link this device again to resume tracking.
+        </p>
+      {:else}
+        <p class="muted">Connect this app to your organization's KFIRE server.</p>
+      {/if}
       <label>
         Server address
         <input type="url" placeholder="https://kfire.example.org" bind:value={serverUrl} required />

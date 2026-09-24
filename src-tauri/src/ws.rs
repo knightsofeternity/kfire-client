@@ -24,7 +24,7 @@ use serde_json::json;
 use tokio::sync::{mpsc::UnboundedSender, watch, Notify};
 use tokio_tungstenite::tungstenite::Message;
 
-use crate::api::{ApiClient, ApiError};
+use crate::api::ApiClient;
 use crate::db::{Db, PendingEvent};
 use crate::scanner::ScannerState;
 
@@ -113,15 +113,19 @@ impl WsTask {
                         .insert(self.server_id.clone(), tokens.access_token.clone());
                     tokens.access_token
                 }
-                Err(ApiError::Server { .. }) => {
+                Err(e) if e.is_definitive_rejection() => {
                     // The refresh token is dead (revoked, expired, rotated
-                    // elsewhere): unlink this server.
-                    self.db.remove_server(&self.server_id);
+                    // elsewhere): unlink this server, keeping its address.
+                    log::warn!("ws[{}]: refresh rejected, unlinking: {e:?}", self.server_id);
+                    self.db.forget_rejected_server(&self.server_id);
                     self.status("logged_out", "session expired, please link again");
                     return;
                 }
-                Err(ApiError::Network(e)) => {
-                    log::warn!("ws[{}]: refresh unreachable: {e}", self.server_id);
+                Err(e) => {
+                    // Anything else is transient: the network, or a server that
+                    // is restarting (a proxy 502 during a redeploy). Unlinking
+                    // here used to wipe the member's setup on every deploy.
+                    log::warn!("ws[{}]: refresh failed, will retry: {e:?}", self.server_id);
                     self.status("disconnected", &format!("server unreachable: {e}"));
                     attempt += 1;
                     if self.backoff(attempt).await {
