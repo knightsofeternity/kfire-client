@@ -9,7 +9,9 @@ use crate::db::CachedGame;
 #[derive(Debug)]
 pub enum ApiError {
     Network(String),
-    Server { code: String, message: String },
+    /// The server answered with a non-2xx `status`. `code` is its JSON error
+    /// code, or `unknown` when the body was not one (a proxy's HTML page).
+    Server { status: u16, code: String, message: String },
 }
 
 impl ApiError {
@@ -19,6 +21,21 @@ impl ApiError {
             ApiError::Network(_) => "network",
             ApiError::Server { code, .. } => code,
         }
+    }
+
+    /// True when the server has definitively refused this refresh token, so
+    /// the link is dead. Only the two answers the refresh endpoint gives for
+    /// that count: anything else (a proxy's 502 while the server restarts, a
+    /// 500, a 429, a Cloudflare 403 page) is transient and must be retried,
+    /// never treated as a reason to forget the server.
+    pub fn is_definitive_rejection(&self) -> bool {
+        matches!(
+            self,
+            ApiError::Server { status: 401, code, .. } if code == "invalid_refresh_token"
+        ) || matches!(
+            self,
+            ApiError::Server { status: 403, code, .. } if code == "banned"
+        )
     }
 }
 
@@ -120,6 +137,7 @@ impl ApiClient {
                 .await
                 .map_err(|e| ApiError::Network(format!("invalid response: {e}")))
         } else {
+            let status = resp.status().as_u16();
             let err = resp
                 .json::<ServerError>()
                 .await
@@ -128,6 +146,7 @@ impl ApiClient {
                     message: "unexpected server error".into(),
                 });
             Err(ApiError::Server {
+                status,
                 code: err.code,
                 message: err.message,
             })
@@ -230,6 +249,7 @@ impl ApiClient {
             Ok(())
         } else {
             Err(ApiError::Server {
+                status: resp.status().as_u16(),
                 code: "patch_failed".into(),
                 message: format!("set presence_status failed: HTTP {}", resp.status()),
             })
@@ -248,6 +268,7 @@ impl ApiClient {
             Ok(())
         } else {
             Err(ApiError::Server {
+                status: resp.status().as_u16(),
                 code: "logout_failed".into(),
                 message: format!("logout failed: HTTP {}", resp.status()),
             })
@@ -286,6 +307,84 @@ impl ApiClient {
 #[cfg(test)]
 mod tests {
     use super::ApiClient;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    /// Serves exactly one HTTP response on a local port and returns the base
+    /// URL to reach it: a real server, so `handle` parses real bytes.
+    fn serve_once(status: &str, content_type: &str, body: &str) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let response = format!(
+            "HTTP/1.1 {status}\r\ncontent-type: {content_type}\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buf = [0u8; 4096];
+            let _ = stream.read(&mut buf);
+            let _ = stream.write_all(response.as_bytes());
+        });
+        format!("http://{addr}")
+    }
+
+    async fn refresh_against(status: &str, content_type: &str, body: &str) -> super::ApiError {
+        let api = ApiClient::new(&serve_once(status, content_type, body));
+        api.refresh("some-refresh-token", "some-device")
+            .await
+            .expect_err("a non-2xx refresh must be an error")
+    }
+
+    #[tokio::test]
+    async fn a_proxy_502_during_a_redeploy_is_not_a_rejection() {
+        let e = refresh_against("502 Bad Gateway", "text/html", "<html>502 Bad Gateway</html>").await;
+        assert!(!e.is_definitive_rejection(), "a 502 must not unlink the server: {e:?}");
+    }
+
+    #[tokio::test]
+    async fn a_server_500_is_not_a_rejection() {
+        let e = refresh_against(
+            "500 Internal Server Error",
+            "application/json",
+            r#"{"code":"internal","message":"boom"}"#,
+        )
+        .await;
+        assert!(!e.is_definitive_rejection(), "{e:?}");
+    }
+
+    #[tokio::test]
+    async fn rate_limiting_is_not_a_rejection() {
+        let e = refresh_against("429 Too Many Requests", "text/plain", "slow down").await;
+        assert!(!e.is_definitive_rejection(), "{e:?}");
+    }
+
+    #[tokio::test]
+    async fn a_cloudflare_403_page_is_not_a_ban() {
+        let e = refresh_against("403 Forbidden", "text/html", "<html>Attention Required</html>").await;
+        assert!(!e.is_definitive_rejection(), "{e:?}");
+    }
+
+    #[tokio::test]
+    async fn an_invalid_refresh_token_is_a_rejection() {
+        let e = refresh_against(
+            "401 Unauthorized",
+            "application/json",
+            r#"{"code":"invalid_refresh_token","message":"refresh token is not valid"}"#,
+        )
+        .await;
+        assert!(e.is_definitive_rejection(), "{e:?}");
+    }
+
+    #[tokio::test]
+    async fn a_ban_is_a_rejection() {
+        let e = refresh_against(
+            "403 Forbidden",
+            "application/json",
+            r#"{"code":"banned","message":"this account is banned"}"#,
+        )
+        .await;
+        assert!(e.is_definitive_rejection(), "{e:?}");
+    }
 
     #[test]
     fn new_trims_whitespace_and_trailing_slash() {

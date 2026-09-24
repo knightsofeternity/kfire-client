@@ -196,6 +196,8 @@ impl Db {
              VALUES (?1, ?2, ?3, ?4, ?5)",
             params![id, url, refresh_token, org_name, now()],
         );
+        // A fresh link supersedes any "session expired" address kept below.
+        let _ = conn.execute("DELETE FROM settings WHERE key = 'expired_server_url'", []);
         id
     }
 
@@ -267,6 +269,21 @@ impl Db {
         let _ = conn.execute("DELETE FROM games WHERE server_id = ?1", params![id]);
         let _ = conn.execute("DELETE FROM pending_events WHERE server_id = ?1", params![id]);
         let _ = conn.execute("DELETE FROM servers WHERE id = ?1", params![id]);
+    }
+
+    /// Drops a link the server definitively refused, but keeps its address so
+    /// the link form can offer it back: the member re-links in one click
+    /// instead of facing an empty form as if KFIRE had never been set up.
+    pub fn forget_rejected_server(&self, id: &str) {
+        if let Some(server) = self.get_server(id) {
+            self.set_setting("expired_server_url", &server.url);
+        }
+        self.remove_server(id);
+    }
+
+    /// The address of the last link the server refused, until the next link.
+    pub fn expired_server_url(&self) -> Option<String> {
+        self.get_setting("expired_server_url")
     }
 
     // --- games catalog (per server) ----------------------------------------
@@ -424,6 +441,36 @@ mod tests {
             name: slug.into(),
             executable_names: vec![exe.into()],
         }
+    }
+
+    #[test]
+    fn a_rejected_link_remembers_its_address() {
+        let db = mem();
+        let a = db.add_server("https://kfire.example.org", "ra", "Guild A");
+        db.forget_rejected_server(&a);
+        assert!(db.get_server(&a).is_none(), "the dead link is gone");
+        assert_eq!(
+            db.expired_server_url().as_deref(),
+            Some("https://kfire.example.org"),
+            "but its address is kept to pre-fill the link form"
+        );
+    }
+
+    #[test]
+    fn linking_again_clears_the_expired_address() {
+        let db = mem();
+        let a = db.add_server("https://kfire.example.org", "ra", "Guild A");
+        db.forget_rejected_server(&a);
+        db.add_server("https://kfire.example.org", "rb", "Guild A");
+        assert_eq!(db.expired_server_url(), None);
+    }
+
+    #[test]
+    fn a_manual_unlink_does_not_offer_the_address_back() {
+        let db = mem();
+        let a = db.add_server("https://kfire.example.org", "ra", "Guild A");
+        db.remove_server(&a);
+        assert_eq!(db.expired_server_url(), None);
     }
 
     #[test]

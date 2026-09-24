@@ -7,6 +7,29 @@ Release, so every version MUST have its own section here before it is tagged.
 The release build fails when one is missing, which is deliberate: publishing a
 version under the previous one's notes has already happened once.
 
+## 0.6.2
+
+### The client no longer forgets its server
+
+Some members found their client back on the first screen, with an empty
+server address, as if it had never been set up, and the games they played in
+the meantime were not counted.
+
+The client renews its session with the server every time it reconnects. Until
+now, any error in that exchange was read as "this device's session is over",
+and the client dropped the link along with the server address. But a server
+that is restarting, for example during an update, briefly answers with an
+error too. A client that reconnected at that exact moment unlinked itself.
+
+Only a real refusal ends the link now: a session the server no longer knows,
+or a banned account. Any other error, like a server that is restarting or busy,
+or a page served by a proxy in front of it, is retried until the server
+answers again, like a network outage.
+
+When a session does end for real, the link form now opens with the server
+address already filled in and says the session expired, so linking again
+takes one click.
+
 ## 0.6.1
 
 Two corrections on Hearthstone, both reported by a beta tester and both visible
