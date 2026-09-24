@@ -58,6 +58,4 @@
       </div>
     {/each}
   {/if}
-
-  <p class="muted small">{t("foot.tray")}</p>
 </section>

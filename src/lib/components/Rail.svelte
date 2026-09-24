@@ -13,18 +13,18 @@
 
 <nav aria-label="KFIRE">
   <img class="logo" src="/favicon.png" alt="" />
-  <button class="tab" class:active={app.tab === "home"} title={t("tab.home")} aria-label={t("tab.home")} onclick={() => app.setTab("home")}>
+  <button type="button" class="tab" class:active={app.tab === "home"} title={t("tab.home")} aria-label={t("tab.home")} onclick={() => app.setTab("home")}>
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l9-7 9 7" /><path d="M5 10v10h14V10" /><path d="M10 20v-6h4v6" /></svg>
   </button>
   <div class="sep"></div>
   {#each games as g (g.tab)}
-    <button class="tab" class:active={app.tab === g.tab} title={g.name} aria-label={g.name} onclick={() => app.setTab(g.tab)}>
+    <button type="button" class="tab" class:active={app.tab === g.tab} title={g.name} aria-label={g.name} onclick={() => app.setTab(g.tab)}>
       <img src="/games/{g.tab}.png" alt="" />
       <span class="pip {g.pip()}"></span>
     </button>
   {/each}
   <div class="spacer"></div>
-  <button class="tab" class:active={app.tab === "settings"} title={t("tab.settings")} aria-label={t("tab.settings")} onclick={() => app.setTab("settings")}>
+  <button type="button" class="tab" class:active={app.tab === "settings"} title={t("tab.settings")} aria-label={t("tab.settings")} onclick={() => app.setTab("settings")}>
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z" /></svg>
   </button>
 </nav>

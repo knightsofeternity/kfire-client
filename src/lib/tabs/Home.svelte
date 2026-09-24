@@ -19,7 +19,7 @@
   <h2>{t("home.status")}</h2>
   <div class="seg" role="radiogroup" aria-label={t("home.status")}>
     {#each statuses as s (s)}
-      <button role="radio" aria-checked={app.globalStatus === s} class:on={app.globalStatus === s} onclick={() => app.setGlobal(s)}>
+      <button type="button" role="radio" aria-checked={app.globalStatus === s} class:on={app.globalStatus === s} onclick={() => app.setGlobal(s)}>
         {t(`status.${s}` as Key)}
       </button>
     {/each}
@@ -54,6 +54,7 @@
   {/if}
 
   <p class="muted small">{t("home.gamesCount", { n: nf.format(app.gamesCount) })}</p>
+  <p class="muted small">{t("foot.tray")}</p>
 </section>
 
 <style>
