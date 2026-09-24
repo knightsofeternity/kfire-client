@@ -7,6 +7,27 @@ Release, so every version MUST have its own section here before it is tagged.
 The release build fails when one is missing, which is deliberate: publishing a
 version under the previous one's notes has already happened once.
 
+## 0.7.0
+
+### A window that fits without scrolling
+
+The client window no longer stacks everything in one long page. A column of
+icons on the left gives each part its own tab: Home, one tab per tracked game
+(Hearthstone, Rocket League, League of Legends) and Settings.
+
+Each game icon carries a small dot: green when its tracking is on, orange when
+something is missing for it to work (a folder not found, an in-game name not
+filled in, a last match that matched nobody), grey when it is off. You see at a
+glance which game needs attention.
+
+A game's tab shows a single switch to turn its tracking on or off, the list of
+what is sent to the server, what never leaves your computer, and your last
+recorded match. The exact file KFIRE writes and its content are still there,
+folded under "Technical details".
+
+The window remembers the last tab you opened, and it now speaks French or
+English, following your system's language.
+
 ## 0.6.2
 
 ### The client no longer forgets its server
