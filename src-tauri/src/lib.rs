@@ -438,6 +438,8 @@ pub struct HsStatus {
     config_block: String,
     /// The install directory, when found.
     install_dir: Option<String>,
+    /// The last match recorded, exactly as it was queued.
+    last_match: Option<serde_json::Value>,
 }
 
 #[tauri::command]
@@ -451,6 +453,7 @@ fn hs_status(state: tauri::State<'_, AppState>) -> HsStatus {
             .unwrap_or_default(),
         config_block: crate::hs::config::POWER_BLOCK.trim_start().to_string(),
         install_dir: crate::hs::installed_dir(&state.db).map(|p| p.to_string_lossy().to_string()),
+        last_match: state.db.last_match(crate::hs::SLUG),
     }
 }
 
@@ -500,6 +503,8 @@ struct RlStatus {
     /// Les pseudos vus au dernier match qui n'a correspondu à personne, s'il y
     /// en a eu un. Uniquement pour que le membre corrige son réglage lui-même.
     last_mismatch: String,
+    /// Le dernier match enregistré, tel qu'il a été mis en file.
+    last_match: Option<serde_json::Value>,
 }
 
 #[tauri::command]
@@ -516,6 +521,7 @@ fn rl_status(state: tauri::State<'_, AppState>) -> RlStatus {
         install_dir: dir.map(|p| p.to_string_lossy().to_string()),
         player_name: state.db.get_setting("rl_player_name").unwrap_or_default(),
         last_mismatch: state.db.get_setting("rl_last_mismatch").unwrap_or_default(),
+        last_match: state.db.last_match(crate::rl::SLUG),
     }
 }
 
