@@ -440,6 +440,10 @@ pub struct HsStatus {
     install_dir: Option<String>,
     /// The last match recorded, exactly as it was queued.
     last_match: Option<serde_json::Value>,
+    /// Whether Hearthstone Deck Tracker's file exists on this machine.
+    hdt_available: bool,
+    /// Whether the member asked for the rating to be read from it.
+    hdt_enabled: bool,
 }
 
 #[tauri::command]
@@ -454,6 +458,8 @@ fn hs_status(state: tauri::State<'_, AppState>) -> HsStatus {
         config_block: crate::hs::config::POWER_BLOCK.trim_start().to_string(),
         install_dir: crate::hs::installed_dir(&state.db).map(|p| p.to_string_lossy().to_string()),
         last_match: state.db.last_match(crate::hs::SLUG),
+        hdt_available: crate::hs::hdt::available(),
+        hdt_enabled: state.db.get_setting("hs_hdt_rating").as_deref() == Some("1"),
     }
 }
 
@@ -481,6 +487,14 @@ fn hs_set_enabled(state: tauri::State<'_, AppState>, enabled: bool) -> Result<()
         crate::hs::stop_watching();
     }
     Ok(())
+}
+
+/// Turns reading the Battlegrounds rating from HDT on or off.
+#[tauri::command]
+fn hs_set_hdt_rating(state: tauri::State<'_, AppState>, enabled: bool) {
+    state
+        .db
+        .set_setting("hs_hdt_rating", if enabled { "1" } else { "0" });
 }
 
 /// Lets the member point at their install when detection failed.
@@ -903,6 +917,7 @@ pub fn run() {
             ignore_game,
             hs_status,
             hs_set_enabled,
+            hs_set_hdt_rating,
             hs_set_install_dir,
             rl_status,
             rl_set_enabled,

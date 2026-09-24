@@ -63,6 +63,15 @@ pub fn payload(
     serde_json::Value::Object(o)
 }
 
+/// Adds HDT's rating to a match payload, when one was found. Two integers and
+/// nothing else: the rest of HDT's record never leaves the machine.
+pub fn with_rating(p: &mut Value, rating: Option<(i64, i64)>) {
+    if let (Some((before, after)), Some(o)) = (rating, p.as_object_mut()) {
+        o.insert("rating".into(), before.into());
+        o.insert("rating_after".into(), after.into());
+    }
+}
+
 /// The state broadcast while a match is played, and nothing else.
 ///
 /// Never queued, never replayed, never written down. The log it comes from
@@ -104,6 +113,62 @@ const LIVE_EVERY: std::time::Duration = std::time::Duration::from_millis(500);
 /// game runs at most once, and the scanner never reports two starts without a
 /// stop between them.
 static STOP: AtomicBool = AtomicBool::new(true);
+
+/// Whether the member asked for the rating to be read from HDT.
+fn hdt_enabled(db: &crate::db::Db) -> bool {
+    db.get_setting("hs_hdt_rating").as_deref() == Some("1")
+}
+
+/// Records a finished match: remembered locally, queued for every eligible
+/// server. `rating_missing` is LOCAL only: it tells the member's window the
+/// rating was expected and not found, and is never sent anywhere.
+fn report(
+    db: &crate::db::Db,
+    notify: &tokio::sync::Notify,
+    m: &parser::Match,
+    played_at: chrono::NaiveDateTime,
+    rating: Option<(i64, i64)>,
+    rating_missing: bool,
+) {
+    let mut p = payload(m, SLUG, played_at);
+    with_rating(&mut p, rating);
+    let mut remembered = p.clone();
+    if rating_missing {
+        if let Some(o) = remembered.as_object_mut() {
+            o.insert("rating_missing".into(), true.into());
+        }
+    }
+    // Remembered before any question of recipients: it is what the member
+    // played, shown in the client even if no server gets it.
+    db.remember_last_match(SLUG, &remembered);
+    let servers: Vec<(String, String)> = db
+        .list_servers()
+        .into_iter()
+        .map(|s| (s.id, s.status_override))
+        .collect();
+    let catalog: Vec<(String, String)> = db
+        .load_games()
+        .into_iter()
+        .map(|(id, g)| (id, g.slug))
+        .collect();
+    let global = db.get_setting("global_status").unwrap_or_default();
+    let targets = targets(&servers, &catalog, &global, SLUG);
+    for id in &targets {
+        db.queue_event(
+            id,
+            "match_result",
+            SLUG,
+            &to_utc(played_at).to_rfc3339(),
+            Some(&p.to_string()),
+        );
+    }
+    if targets.is_empty() {
+        log::info!("hs: a {} went unreported, no eligible server", m.result);
+        return;
+    }
+    notify.notify_one();
+    log::info!("hs: queued a {} in {}", m.result, m.mode);
+}
 
 /// Starts following the log, unless the member has not enabled tracking.
 pub fn start_watching(
@@ -152,37 +217,26 @@ pub fn start_watching(
                 // timer work it out, so the card goes away at once.
                 broadcast(ended_payload(SLUG));
                 let played_at = m.played_at(start);
-                // Remembered before any question of recipients: it is what the
-                // member played, shown in the client even if no server gets it.
-                db.remember_last_match(SLUG, &payload(&m, SLUG, played_at));
-                let servers: Vec<(String, String)> = db
-                    .list_servers()
-                    .into_iter()
-                    .map(|s| (s.id, s.status_override))
-                    .collect();
-                let catalog: Vec<(String, String)> = db
-                    .load_games()
-                    .into_iter()
-                    .map(|(id, g)| (id, g.slug))
-                    .collect();
-                let global = db.get_setting("global_status").unwrap_or_default();
-                let targets = targets(&servers, &catalog, &global, SLUG);
-                for id in &targets {
-                    let p = payload(&m, SLUG, played_at);
-                    db.queue_event(
-                        id,
-                        "match_result",
-                        SLUG,
-                        &to_utc(played_at).to_rfc3339(),
-                        Some(&p.to_string()),
-                    );
-                }
-                if targets.is_empty() {
-                    log::info!("hs: a {} went unreported, no eligible server", m.result);
+                let wants_rating =
+                    hdt_enabled(&db) && m.mode == "battlegrounds" && m.placement.is_some();
+                if !wants_rating {
+                    report(&db, &notify, &m, played_at, None, false);
                     return;
                 }
-                notify.notify_one();
-                log::info!("hs: queued a {} in {}", m.result, m.mode);
+                // HDT may write its file a few seconds after we saw the end:
+                // wait for it in a thread of its own, so the log follower
+                // never stalls, and never more than thirty seconds.
+                let (db, notify, m) = (db.clone(), notify.clone(), m);
+                std::thread::spawn(move || {
+                    let placement = m.placement.unwrap_or_default();
+                    match hdt::wait_for_rating(placement, to_utc(played_at)) {
+                        Ok(r) => report(&db, &notify, &m, played_at, Some(r), false),
+                        Err(why) => {
+                            log::info!("hs: rating not recorded: {why}");
+                            report(&db, &notify, &m, played_at, None, true);
+                        }
+                    }
+                });
             },
             |state| {
                 // Spaced out, and only when something changed: the log is
@@ -404,6 +458,17 @@ mod tests {
             .unwrap()
             .with_timezone(&chrono::Utc);
         assert_eq!(to_utc(local), expected);
+    }
+
+    #[test]
+    fn a_rating_adds_exactly_two_fields() {
+        let mut v = payload(&a_match(), "hearthstone", at());
+        with_rating(&mut v, Some((5571, 5644)));
+        assert_eq!(v["rating"], 5571);
+        assert_eq!(v["rating_after"], 5644);
+        let mut w = payload(&a_match(), "hearthstone", at());
+        with_rating(&mut w, None);
+        assert!(w.get("rating").is_none() && w.get("rating_after").is_none());
     }
 
     #[test]
