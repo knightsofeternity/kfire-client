@@ -6,6 +6,7 @@
 //! only.
 
 pub mod config;
+pub mod hdt;
 pub mod parser;
 pub mod paths;
 pub mod watcher;
