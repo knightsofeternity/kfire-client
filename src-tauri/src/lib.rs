@@ -352,15 +352,26 @@ fn set_autostart(
 /// What to do about launch at login, given the member's stored wish and
 /// whether it is registered right now: (store the wish "1", enable it).
 ///
-/// No wish yet means "on", once. A wish of "1" is re-applied whenever it went
+/// No wish yet means "on", once. A wish of "1" is re-applied when it went
 /// missing: installing an update runs the old uninstaller, which removes the
-/// registration. A wish of "0" is never touched.
+/// registration. A wish of "0" is never touched. Called at the first link and
+/// on the first start of a new version only.
 fn autostart_action(stored_wanted: Option<&str>, enabled_now: bool) -> (bool, bool) {
     match stored_wanted {
         None => (true, !enabled_now),
         Some("1") => (false, !enabled_now),
         Some(_) => (false, false),
     }
+}
+
+/// Whether this start is the first one of a new version (or the very first).
+///
+/// Only then is launch at login checked at startup: an update removes it, but
+/// on any other start a missing registration means the member turned it off
+/// outside the app (Task Manager, the system settings, a deleted .desktop
+/// file), and that choice must stand.
+fn version_changed(last_run: Option<&str>, current: &str) -> bool {
+    last_run != Some(current)
 }
 
 /// Keeps launch at login in line with the member's wish, see `autostart_action`.
@@ -1079,11 +1090,17 @@ pub fn run() {
 
             // Auto-resume every linked server's session (offline ones stay
             // stopped). A presence app runs in the background, so it launches
-            // at login unless the member turned that off (autostart_wanted),
-            // and it is restored at every start, since an update removes it.
+            // at login unless the member turned that off (autostart_wanted).
+            // An update removes it, so it is restored on the first start of a
+            // new version, and only then (see `version_changed`).
             if !db.list_servers().is_empty() {
                 app.state::<AppState>().start_all();
-                ensure_autostart(app.handle(), &db);
+                let current = env!("CARGO_PKG_VERSION");
+                let last_run = db.get_setting("last_run_version");
+                if version_changed(last_run.as_deref(), current) {
+                    ensure_autostart(app.handle(), &db);
+                    db.set_setting("last_run_version", current);
+                }
             }
 
             // --- system tray (menu/icon/tooltip filled by rebuild_tray) -------
@@ -1122,6 +1139,15 @@ mod tests {
     fn autostart_wanted_is_restored_when_an_update_removed_it() {
         assert_eq!(autostart_action(Some("1"), false), (false, true));
         assert_eq!(autostart_action(Some("1"), true), (false, false));
+    }
+
+    #[test]
+    fn autostart_is_checked_only_when_the_version_changed() {
+        // Absent: a first start, or an upgrade from a version before 0.7.1.
+        assert!(version_changed(None, "0.7.1"));
+        assert!(version_changed(Some("0.7.0"), "0.7.1"));
+        // Same version: an "off" set outside the app must stand.
+        assert!(!version_changed(Some("0.7.1"), "0.7.1"));
     }
 
     #[test]
