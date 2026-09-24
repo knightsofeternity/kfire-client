@@ -137,13 +137,19 @@ fn queued_ts(played_at: chrono::NaiveDateTime) -> String {
     to_utc(played_at).to_rfc3339()
 }
 
+/// How long past the end of the wait a held match stays held, so the thread
+/// waiting for the rating always releases it before the hold runs out.
+const HOLD_MARGIN: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// Queues `p` for every eligible server, on disk, WITHOUT waking the sender,
-/// and returns the servers it was queued for.
+/// and returns the servers it was queued for. With `hold_until`, no drain
+/// sends it before that instant unless it is released first.
 fn queue_match(
     db: &crate::db::Db,
     m: &parser::Match,
     played_at: chrono::NaiveDateTime,
     p: &Value,
+    hold_until: Option<chrono::DateTime<chrono::Utc>>,
 ) -> Vec<String> {
     let servers: Vec<(String, String)> = db
         .list_servers()
@@ -157,14 +163,12 @@ fn queue_match(
         .collect();
     let global = db.get_setting("global_status").unwrap_or_default();
     let targets = targets(&servers, &catalog, &global, SLUG);
+    let (ts, raw) = (queued_ts(played_at), p.to_string());
     for id in &targets {
-        db.queue_event(
-            id,
-            "match_result",
-            SLUG,
-            &queued_ts(played_at),
-            Some(&p.to_string()),
-        );
+        match hold_until {
+            Some(h) => db.queue_held_event(id, "match_result", SLUG, &ts, &raw, h),
+            None => db.queue_event(id, "match_result", SLUG, &ts, Some(&raw)),
+        }
     }
     if targets.is_empty() {
         log::info!("hs: a {} went unreported, no eligible server", m.result);
@@ -193,13 +197,15 @@ fn report(
     // Remembered before any question of recipients: it is what the member
     // played, shown in the client even if no server gets it.
     remember(db, &p, false);
-    let targets = queue_match(db, m, played_at, &p);
+    let targets = queue_match(db, m, played_at, &p, None);
     send_queued(notify, m, &targets);
 }
 
 /// The first half of a match that waits for HDT's rating: remembered and
 /// queued at once WITHOUT the rating, so quitting KFIRE during the wait loses
-/// nothing, but not sent yet, so the rating can still be added.
+/// nothing, but held back from the queue, so that no drain (the game closing,
+/// a reconnection) sends it before the rating can be added. If KFIRE quits
+/// during the wait, the hold runs out and the match goes without its rating.
 fn queue_before_rating(
     db: &crate::db::Db,
     m: &parser::Match,
@@ -207,10 +213,13 @@ fn queue_before_rating(
 ) -> Vec<String> {
     let p = payload(m, SLUG, played_at);
     remember(db, &p, false);
-    queue_match(db, m, played_at, &p)
+    let hold = chrono::Utc::now()
+        + chrono::Duration::from_std(hdt::WAIT_TOTAL + HOLD_MARGIN).unwrap_or_default();
+    queue_match(db, m, played_at, &p, Some(hold))
 }
 
-/// The rating arrived: added to the rows still waiting, remembered, sent.
+/// The rating arrived: added to the rows still waiting (which also releases
+/// them), remembered, sent.
 fn rating_found(
     db: &crate::db::Db,
     notify: &tokio::sync::Notify,
@@ -236,8 +245,8 @@ fn rating_found(
     send_queued(notify, m, targets);
 }
 
-/// No rating after the wait: the queued match stays as it is, and only the
-/// member's window learns the rating is missing.
+/// No rating after the wait: the queued match is released as it is, and only
+/// the member's window learns the rating is missing.
 fn rating_not_found(
     db: &crate::db::Db,
     notify: &tokio::sync::Notify,
@@ -246,6 +255,10 @@ fn rating_not_found(
     targets: &[String],
 ) {
     let p = payload(m, SLUG, played_at);
+    let ts = queued_ts(played_at);
+    for id in targets {
+        db.release_pending(id, "match_result", SLUG, &ts);
+    }
     remember(db, &p, true);
     send_queued(notify, m, targets);
 }
@@ -566,8 +579,19 @@ mod tests {
         (db, a)
     }
 
+    /// The rows the sender would take right now.
     fn queued(db: &crate::db::Db, server: &str) -> Vec<Value> {
-        db.pending_events(server)
+        parsed(db.pending_events(server))
+    }
+
+    /// Every row, held or not.
+    fn queued_or_held(db: &crate::db::Db, server: &str) -> Vec<Value> {
+        let later = chrono::Utc::now() + chrono::Duration::days(1);
+        parsed(db.pending_events_at(server, later))
+    }
+
+    fn parsed(events: Vec<crate::db::PendingEvent>) -> Vec<Value> {
+        events
             .iter()
             .map(|e| serde_json::from_str(e.payload.as_deref().unwrap()).unwrap())
             .collect()
@@ -580,11 +604,16 @@ mod tests {
 
     #[test]
     fn a_match_waiting_for_its_rating_is_already_on_disk_but_not_sent() {
-        // Quitting KFIRE during the wait must not lose the match.
+        // Quitting KFIRE during the wait must not lose the match, and a drain
+        // during the wait (the game closed, a reconnection) must not send it.
         let (db, a) = db_with_a_server();
         let targets = queue_before_rating(&db, &a_match(), at());
         assert_eq!(targets, vec![a.clone()]);
-        let q = queued(&db, &a);
+        assert!(
+            queued(&db, &a).is_empty(),
+            "held while the rating is awaited"
+        );
+        let q = queued_or_held(&db, &a);
         assert_eq!(q.len(), 1);
         assert!(q[0].get("rating").is_none());
         let mem = db.last_match(SLUG).unwrap();
@@ -613,7 +642,9 @@ mod tests {
         let (db, a) = db_with_a_server();
         let notify = tokio::sync::Notify::new();
         let targets = queue_before_rating(&db, &a_match(), at());
-        for e in db.pending_events(&a) {
+        // Sent meanwhile, or its server unlinked: the rows are gone.
+        let later = chrono::Utc::now() + chrono::Duration::days(1);
+        for e in db.pending_events_at(&a, later) {
             db.delete_event(e.id);
         }
         rating_found(&db, &notify, &a_match(), at(), &targets, (5571, 5644));
@@ -632,6 +663,17 @@ mod tests {
         assert!(q[0].get("rating_missing").is_none() && q[0].get("rating").is_none());
         assert_eq!(db.last_match(SLUG).unwrap()["rating_missing"], true);
         assert!(was_notified(&notify));
+    }
+
+    #[test]
+    fn the_hold_outlasts_the_wait_for_the_rating() {
+        let (db, a) = db_with_a_server();
+        queue_before_rating(&db, &a_match(), at());
+        let wait = chrono::Duration::from_std(hdt::WAIT_TOTAL).unwrap();
+        let end_of_wait = chrono::Utc::now() + wait;
+        assert!(db.pending_events_at(&a, end_of_wait).is_empty());
+        let well_after = end_of_wait + chrono::Duration::minutes(1);
+        assert_eq!(db.pending_events_at(&a, well_after).len(), 1);
     }
 
     #[test]

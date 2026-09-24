@@ -143,6 +143,17 @@ impl Db {
             )?;
         }
 
+        // v3 -> v4: a queued event can be held back until a given instant
+        // (RFC 3339, UTC). A Battlegrounds match waits there for its rating;
+        // every other event leaves it NULL and goes at once.
+        let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+        if version < 4 {
+            conn.execute_batch(
+                "ALTER TABLE pending_events ADD COLUMN hold_until TEXT;
+                 PRAGMA user_version = 4;",
+            )?;
+        }
+
         Ok(Self {
             conn: Mutex::new(conn),
         })
@@ -397,31 +408,101 @@ impl Db {
         );
     }
 
+    /// Queues an event that must not be sent before `hold_until`, unless it is
+    /// released (`release_pending`, `update_pending_payload`) earlier.
+    pub fn queue_held_event(
+        &self,
+        server_id: &str,
+        event_type: &str,
+        game_slug: &str,
+        ts: &str,
+        payload: &str,
+        hold_until: chrono::DateTime<chrono::Utc>,
+    ) {
+        let conn = self.conn.lock().unwrap();
+        let _ = conn.execute(
+            "INSERT INTO pending_events (server_id, type, game_slug, ts, payload, hold_until)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                server_id,
+                event_type,
+                game_slug,
+                ts,
+                payload,
+                hold_until.to_rfc3339()
+            ],
+        );
+    }
+
+    /// The events ready to be sent to `server_id`, oldest first.
     pub fn pending_events(&self, server_id: &str) -> Vec<PendingEvent> {
+        self.pending_events_at(server_id, chrono::Utc::now())
+    }
+
+    /// The events ready to be sent at `now`: a held event is skipped until its
+    /// hold ends. The hold is compared as a date, not as text, and a hold that
+    /// cannot be read holds nothing back.
+    pub fn pending_events_at(
+        &self,
+        server_id: &str,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Vec<PendingEvent> {
         let conn = self.conn.lock().unwrap();
         let Ok(mut stmt) = conn.prepare(
-            "SELECT id, type, game_slug, ts, payload FROM pending_events
+            "SELECT id, type, game_slug, ts, payload, hold_until FROM pending_events
              WHERE server_id = ?1 ORDER BY id",
         ) else {
             return Vec::new();
         };
         let rows = stmt.query_map(params![server_id], |r| {
-            Ok(PendingEvent {
-                id: r.get(0)?,
-                event_type: r.get(1)?,
-                game_slug: r.get(2)?,
-                ts: r.get(3)?,
-                payload: r.get(4)?,
-            })
+            let hold: Option<String> = r.get(5)?;
+            Ok((
+                PendingEvent {
+                    id: r.get(0)?,
+                    event_type: r.get(1)?,
+                    game_slug: r.get(2)?,
+                    ts: r.get(3)?,
+                    payload: r.get(4)?,
+                },
+                hold,
+            ))
         });
+        let held = |hold: &Option<String>| {
+            hold.as_deref()
+                .and_then(|h| chrono::DateTime::parse_from_rfc3339(h).ok())
+                .is_some_and(|h| h > now)
+        };
         match rows {
-            Ok(it) => it.flatten().collect(),
+            Ok(it) => it
+                .flatten()
+                .filter(|(_, hold)| !held(hold))
+                .map(|(e, _)| e)
+                .collect(),
             Err(_) => Vec::new(),
         }
     }
 
-    /// Rewrites the payload of an event still waiting to be sent, and says how
-    /// many rows it touched: 0 means it already left (or was never queued).
+    /// Lifts the hold on an event still waiting, and says how many rows it
+    /// touched: 0 means it already left (or was never queued).
+    pub fn release_pending(
+        &self,
+        server_id: &str,
+        event_type: &str,
+        game_slug: &str,
+        ts: &str,
+    ) -> usize {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE pending_events SET hold_until = NULL
+             WHERE server_id = ?1 AND type = ?2 AND game_slug = ?3 AND ts = ?4",
+            params![server_id, event_type, game_slug, ts],
+        )
+        .unwrap_or(0)
+    }
+
+    /// Rewrites the payload of an event still waiting to be sent and lifts its
+    /// hold, and says how many rows it touched: 0 means it already left (or
+    /// was never queued).
     pub fn update_pending_payload(
         &self,
         server_id: &str,
@@ -432,7 +513,7 @@ impl Db {
     ) -> usize {
         let conn = self.conn.lock().unwrap();
         conn.execute(
-            "UPDATE pending_events SET payload = ?5
+            "UPDATE pending_events SET payload = ?5, hold_until = NULL
              WHERE server_id = ?1 AND type = ?2 AND game_slug = ?3 AND ts = ?4",
             params![server_id, event_type, game_slug, ts, payload],
         )
@@ -587,6 +668,89 @@ mod tests {
             events[1].payload.as_deref(),
             Some(r#"{"mode":"battlegrounds"}"#)
         );
+    }
+
+    fn in_secs(s: i64) -> chrono::DateTime<chrono::Utc> {
+        chrono::Utc::now() + chrono::Duration::seconds(s)
+    }
+
+    #[test]
+    fn a_held_event_is_not_sent_before_its_hold_ends() {
+        let db = mem();
+        let a = db.add_server("https://a", "r", "A");
+        db.queue_event(&a, "game_stopped", "hearthstone", "t0", None);
+        db.queue_held_event(&a, "match_result", "hearthstone", "t1", "{}", in_secs(35));
+
+        // Before the hold ends, only the ordinary event goes.
+        let now = db.pending_events(&a);
+        assert_eq!(now.len(), 1);
+        assert_eq!(now[0].event_type, "game_stopped");
+        // After it, the held one goes too, even if nothing released it (KFIRE
+        // quit during the wait).
+        assert_eq!(db.pending_events_at(&a, in_secs(36)).len(), 2);
+    }
+
+    #[test]
+    fn a_released_event_is_sent_at_once() {
+        let db = mem();
+        let a = db.add_server("https://a", "r", "A");
+        db.queue_held_event(&a, "match_result", "hearthstone", "t1", "{}", in_secs(35));
+        assert_eq!(
+            db.release_pending(&a, "match_result", "hearthstone", "t1"),
+            1
+        );
+        assert_eq!(db.pending_events(&a).len(), 1);
+        assert_eq!(db.pending_events(&a)[0].payload.as_deref(), Some("{}"));
+    }
+
+    #[test]
+    fn rewriting_a_held_payload_releases_it() {
+        let db = mem();
+        let a = db.add_server("https://a", "r", "A");
+        db.queue_held_event(&a, "match_result", "hearthstone", "t1", "old", in_secs(35));
+        assert_eq!(
+            db.update_pending_payload(&a, "match_result", "hearthstone", "t1", "new"),
+            1
+        );
+        let events = db.pending_events(&a);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].payload.as_deref(), Some("new"));
+    }
+
+    #[test]
+    fn a_v3_database_keeps_its_queue_when_upgraded() {
+        let path = std::env::temp_dir().join(format!("kfire-v3-{}.db", Uuid::new_v4()));
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE games (
+                     server_id TEXT NOT NULL, slug TEXT NOT NULL, name TEXT NOT NULL,
+                     exe_names TEXT NOT NULL, PRIMARY KEY (server_id, slug));
+                 CREATE TABLE pending_events (
+                     id INTEGER PRIMARY KEY AUTOINCREMENT, server_id TEXT NOT NULL,
+                     type TEXT NOT NULL, game_slug TEXT NOT NULL, ts TEXT NOT NULL,
+                     payload TEXT);
+                 INSERT INTO pending_events (server_id, type, game_slug, ts, payload)
+                     VALUES ('s', 'match_result', 'hearthstone', 't1', '{}');
+                 PRAGMA user_version = 3;",
+            )
+            .unwrap();
+        }
+        let db = Db::open(&path).unwrap();
+        let events = db.pending_events("s");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].payload.as_deref(), Some("{}"));
+        let version: i64 = db
+            .conn
+            .lock()
+            .unwrap()
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, 4);
+        drop(db);
+        for ext in ["", "-wal", "-shm"] {
+            let _ = std::fs::remove_file(format!("{}{ext}", path.display()));
+        }
     }
 
     #[test]
