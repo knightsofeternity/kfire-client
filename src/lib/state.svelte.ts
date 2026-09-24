@@ -181,6 +181,9 @@ class AppState {
     try {
       await invoke("rl_set_player_name", { name: this.rlName });
       await this.loadRl();
+      // Show what was saved: the backend trims, and loadRl keeps a name that
+      // differs from the previous one, which would leave the untrimmed text.
+      if (this.rl) this.rlName = this.rl.player_name;
     } catch (e) {
       this.rlError = String(e);
     }
