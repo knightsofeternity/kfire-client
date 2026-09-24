@@ -9,8 +9,8 @@ describe("ago", () => {
     expect(ago("2026-09-24T11:59:30Z", now, "en")).toBe("just now");
   });
   it("counts minutes, hours, then days", () => {
-    expect(ago("2026-09-24T11:48:00Z", now, "fr")).toBe("il y a 12 min");
-    expect(ago("2026-09-24T09:00:00Z", now, "fr")).toBe("il y a 3 h");
+    expect(ago("2026-09-24T11:48:00Z", now, "fr")).toBe("il y a 12\u00a0min");
+    expect(ago("2026-09-24T09:00:00Z", now, "fr")).toBe("il y a 3\u00a0h");
     expect(ago("2026-09-23T10:00:00Z", now, "fr")).toBe("hier");
     expect(ago("2026-09-24T11:48:00Z", now, "en")).toBe("12 min. ago");
   });
@@ -39,7 +39,7 @@ describe("hsSummary", () => {
       now,
       "fr",
     );
-    expect(s).toEqual({ title: "Champs de bataille · 1er", detail: "il y a 12 min · 18 tours", highlight: true });
+    expect(s).toEqual({ title: "Champs de bataille · 1er", detail: "il y a 12\u00a0min · 18 tours", highlight: true });
   });
   it("shows a regular game's result", () => {
     const s = hsSummary(
@@ -67,7 +67,7 @@ describe("rlSummary", () => {
       now,
       "fr",
     );
-    expect(orange).toEqual({ title: "Victoire · 3 - 1", detail: "2c2 · il y a 12 min", highlight: true });
+    expect(orange).toEqual({ title: "Victoire · 3 - 1", detail: "2c2 · il y a 12\u00a0min", highlight: true });
     const blue = rlSummary(
       { result: "loss", player_team: 0, team_blue_score: 0, team_orange_score: 2, team_size: 3, played_at: "2026-09-24T11:48:00Z" },
       now,
