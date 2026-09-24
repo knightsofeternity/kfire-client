@@ -219,7 +219,8 @@ fn queue_before_rating(
 }
 
 /// The rating arrived: added to the rows still waiting (which also releases
-/// them), remembered, sent.
+/// them), remembered, sent. Unless the member withdrew consent during the
+/// wait: the match then goes without it, and is not marked as missing one.
 fn rating_found(
     db: &crate::db::Db,
     notify: &tokio::sync::Notify,
@@ -228,6 +229,11 @@ fn rating_found(
     targets: &[String],
     rating: (i64, i64),
 ) {
+    if !hdt_enabled(db) {
+        log::info!("hs: rating found but no longer wanted, not sent");
+        release_without_rating(db, notify, m, played_at, targets, false);
+        return;
+    }
     let mut p = payload(m, SLUG, played_at);
     with_rating(&mut p, Some(rating));
     let raw = p.to_string();
@@ -236,10 +242,12 @@ fn rating_found(
         .iter()
         .map(|id| db.update_pending_payload(id, "match_result", SLUG, &ts, &raw))
         .sum();
-    // The queue drained meanwhile (a reconnection, another event): the match
-    // already left without its rating, which is accepted.
+    // The rows are gone: the hold ran out and the match left without its
+    // rating, or its server was unlinked. Both are accepted.
     if changed == 0 && !targets.is_empty() {
-        log::info!("hs: rating found after the match was sent");
+        log::info!(
+            "hs: rating found but the queued match is gone (already sent or server unlinked)"
+        );
     }
     remember(db, &p, false);
     send_queued(notify, m, targets);
@@ -254,12 +262,25 @@ fn rating_not_found(
     played_at: chrono::NaiveDateTime,
     targets: &[String],
 ) {
+    release_without_rating(db, notify, m, played_at, targets, true);
+}
+
+/// Releases the held match as it was queued, without a rating, remembers it
+/// (flagged `rating_missing` when asked) and sends it.
+fn release_without_rating(
+    db: &crate::db::Db,
+    notify: &tokio::sync::Notify,
+    m: &parser::Match,
+    played_at: chrono::NaiveDateTime,
+    targets: &[String],
+    rating_missing: bool,
+) {
     let p = payload(m, SLUG, played_at);
     let ts = queued_ts(played_at);
     for id in targets {
         db.release_pending(id, "match_result", SLUG, &ts);
     }
-    remember(db, &p, true);
+    remember(db, &p, rating_missing);
     send_queued(notify, m, targets);
 }
 
@@ -576,6 +597,7 @@ mod tests {
             executable_names: vec!["Hearthstone.exe".into()],
         };
         db.replace_games(&a, &[hs]).unwrap();
+        db.set_setting("hs_hdt_rating", "1");
         (db, a)
     }
 
@@ -662,6 +684,25 @@ mod tests {
         assert_eq!(q.len(), 1);
         assert!(q[0].get("rating_missing").is_none() && q[0].get("rating").is_none());
         assert_eq!(db.last_match(SLUG).unwrap()["rating_missing"], true);
+        assert!(was_notified(&notify));
+    }
+
+    #[test]
+    fn a_rating_is_not_sent_if_consent_was_withdrawn_during_the_wait() {
+        let (db, a) = db_with_a_server();
+        let notify = tokio::sync::Notify::new();
+        let targets = queue_before_rating(&db, &a_match(), at());
+        db.set_setting("hs_hdt_rating", "0");
+        rating_found(&db, &notify, &a_match(), at(), &targets, (5571, 5644));
+        let q = queued(&db, &a);
+        assert_eq!(q.len(), 1, "released without its rating");
+        assert!(q[0].get("rating").is_none() && q[0].get("rating_after").is_none());
+        let mem = db.last_match(SLUG).unwrap();
+        assert!(mem.get("rating").is_none());
+        assert!(
+            mem.get("rating_missing").is_none(),
+            "not missing: not wanted"
+        );
         assert!(was_notified(&notify));
     }
 
