@@ -7,6 +7,36 @@ Release, so every version MUST have its own section here before it is tagged.
 The release build fails when one is missing, which is deliberate: publishing a
 version under the previous one's notes has already happened once.
 
+## 0.7.1-beta.1
+
+Test build of 0.7.1, not offered by the update indicator.
+
+### Your Battlegrounds rating, from Hearthstone Deck Tracker
+
+Hearthstone does not write your Battlegrounds rating in its logs. Hearthstone
+Deck Tracker, which many players already use, does keep it. If it is installed,
+the Hearthstone tab now offers to read your rating from it after each solo
+Battlegrounds game, and to send it along with the match. It is off until you
+turn it on.
+
+Only your rating before and after the game is read and sent. Everything else
+Hearthstone Deck Tracker records stays on your computer.
+
+The match itself is saved the moment it ends, so closing KFIRE right after a
+game never loses it. When no rating could be found, usually because Hearthstone
+Deck Tracker was not running, the match is sent without it and the Hearthstone
+tab says so.
+
+### Launch at login survives updates
+
+Installing a new version used to remove KFIRE from the programs started with
+your computer, every time. KFIRE now remembers your choice and puts it back
+after an update.
+
+It is turned back on once for everyone with this version, because KFIRE cannot
+tell an update apart from a choice you made. If you had turned it off on
+purpose, turn it off again in Settings: from then on your choice is kept.
+
 ## 0.7.0
 
 ### A window that fits without scrolling

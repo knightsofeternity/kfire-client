@@ -34,7 +34,8 @@ export function install() {
             config_path: "C:\\Users\\djam\\AppData\\Local\\Blizzard\\Hearthstone\\log.config",
             config_block: "[Power]\nLogLevel=1\nFilePrinting=true",
             install_dir: "C:\\Battle.net\\Hearthstone",
-            last_match: { mode: "battlegrounds", result: "win", placement: 1, turns: 18, played_at: iso(12) },
+            hdt_available: true, hdt_enabled: true,
+            last_match: { mode: "battlegrounds", result: "loss", placement: 2, turns: 18, rating: 5571, rating_after: 5644, played_at: iso(12) },
           };
         case "rl_status":
           return {

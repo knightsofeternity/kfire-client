@@ -4,10 +4,23 @@ import type { Pip } from "./types";
 // cannot work as set up is exactly what the dot must point at.
 
 export function hsPip(
-  s: { supported: boolean; enabled: boolean; install_dir: string | null } | null,
+  s: {
+    supported: boolean;
+    enabled: boolean;
+    install_dir: string | null;
+    hdt_available?: boolean;
+    hdt_enabled?: boolean;
+    last_match?: Record<string, unknown> | null;
+  } | null,
 ): Pip {
   if (!s || !s.supported) return "off";
-  if (s.enabled) return "on";
+  if (s.enabled) {
+    // The member asked for the rating and HDT did not give it: worth a look.
+    // Only while HDT is still installed: once it is gone, the tab says so.
+    return s.hdt_available !== false && s.hdt_enabled && s.last_match?.rating_missing === true
+      ? "todo"
+      : "on";
+  }
   return s.install_dir ? "off" : "todo";
 }
 

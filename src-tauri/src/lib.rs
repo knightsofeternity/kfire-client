@@ -285,13 +285,12 @@ async fn poll_until_linked(
                     }
                     app.state::<AppState>().start_session(&server_id);
 
-                    // First successful link: default to launch-at-login (set once).
-                    if db.get_setting("autostart_configured").is_none() {
-                        use tauri_plugin_autostart::ManagerExt;
-                        if app.autolaunch().enable().is_ok() {
-                            db.set_setting("autostart_configured", "1");
-                        }
-                    }
+                    // First successful link: launch at login by default,
+                    // then whatever the member wants. The version is recorded
+                    // here too, or the next start of this same version would
+                    // check again and undo an "off" set outside the app.
+                    ensure_autostart(&app, &db);
+                    db.set_setting("last_run_version", env!("CARGO_PKG_VERSION"));
                 }
                 return;
             }
@@ -332,8 +331,8 @@ fn get_autostart(app: tauri::AppHandle) -> Result<bool, String> {
     app.autolaunch().is_enabled().map_err(|e| e.to_string())
 }
 
-/// Register/unregister the app to launch at login. The choice is remembered so
-/// the first-link default never overrides what the user picked here.
+/// Register/unregister the app to launch at login. The choice is remembered as
+/// the member's wish (`autostart_wanted`), which startup keeps applying.
 #[tauri::command]
 fn set_autostart(
     app: tauri::AppHandle,
@@ -348,8 +347,52 @@ fn set_autostart(
         manager.disable()
     };
     res.map_err(|e| e.to_string())?;
-    state.db.set_setting("autostart_configured", "1");
+    let wanted = if enabled { "1" } else { "0" };
+    state.db.set_setting("autostart_wanted", wanted);
     Ok(())
+}
+
+/// What to do about launch at login, given the member's stored wish and
+/// whether it is registered right now: (store the wish "1", enable it).
+///
+/// No wish yet means "on", once. A wish of "1" is re-applied when it went
+/// missing: installing an update runs the old uninstaller, which removes the
+/// registration. A wish of "0" is never touched. Called at the first link and
+/// on the first start of a new version only.
+fn autostart_action(stored_wanted: Option<&str>, enabled_now: bool) -> (bool, bool) {
+    match stored_wanted {
+        None => (true, !enabled_now),
+        Some("1") => (false, !enabled_now),
+        Some(_) => (false, false),
+    }
+}
+
+/// Whether this start is the first one of a new version (or the very first).
+///
+/// Only then is launch at login checked at startup: an update removes it, but
+/// on any other start a missing registration means the member turned it off
+/// outside the app (Task Manager, the system settings, a deleted .desktop
+/// file), and that choice must stand.
+fn version_changed(last_run: Option<&str>, current: &str) -> bool {
+    last_run != Some(current)
+}
+
+/// Keeps launch at login in line with the member's wish, see `autostart_action`.
+fn ensure_autostart(app: &tauri::AppHandle, db: &Db) {
+    use tauri_plugin_autostart::ManagerExt;
+    let manager = app.autolaunch();
+    let enabled_now = manager.is_enabled().unwrap_or(false);
+    let stored = db.get_setting("autostart_wanted");
+    let (store, enable) = autostart_action(stored.as_deref(), enabled_now);
+    if store {
+        db.set_setting("autostart_wanted", "1");
+    }
+    if enable {
+        match manager.enable() {
+            Ok(()) => log::info!("autostart: launch at login restored"),
+            Err(e) => log::warn!("autostart: could not enable launch at login: {e}"),
+        }
+    }
 }
 
 #[tauri::command]
@@ -440,6 +483,10 @@ pub struct HsStatus {
     install_dir: Option<String>,
     /// The last match recorded, exactly as it was queued.
     last_match: Option<serde_json::Value>,
+    /// Whether Hearthstone Deck Tracker's file exists on this machine.
+    hdt_available: bool,
+    /// Whether the member asked for the rating to be read from it.
+    hdt_enabled: bool,
 }
 
 #[tauri::command]
@@ -454,6 +501,8 @@ fn hs_status(state: tauri::State<'_, AppState>) -> HsStatus {
         config_block: crate::hs::config::POWER_BLOCK.trim_start().to_string(),
         install_dir: crate::hs::installed_dir(&state.db).map(|p| p.to_string_lossy().to_string()),
         last_match: state.db.last_match(crate::hs::SLUG),
+        hdt_available: crate::hs::hdt::available(),
+        hdt_enabled: state.db.get_setting("hs_hdt_rating").as_deref() == Some("1"),
     }
 }
 
@@ -481,6 +530,14 @@ fn hs_set_enabled(state: tauri::State<'_, AppState>, enabled: bool) -> Result<()
         crate::hs::stop_watching();
     }
     Ok(())
+}
+
+/// Turns reading the Battlegrounds rating from HDT on or off.
+#[tauri::command]
+fn hs_set_hdt_rating(state: tauri::State<'_, AppState>, enabled: bool) {
+    state
+        .db
+        .set_setting("hs_hdt_rating", if enabled { "1" } else { "0" });
 }
 
 /// Lets the member point at their install when detection failed.
@@ -903,6 +960,7 @@ pub fn run() {
             ignore_game,
             hs_status,
             hs_set_enabled,
+            hs_set_hdt_rating,
             hs_set_install_dir,
             rl_status,
             rl_set_enabled,
@@ -1034,16 +1092,17 @@ pub fn run() {
             app.manage(state);
 
             // Auto-resume every linked server's session (offline ones stay
-            // stopped). A presence app runs in the background, so default to
-            // launch-at-login the first time we're linked - but only set it
-            // once, then the user's toggle (autostart_configured) wins forever.
+            // stopped). A presence app runs in the background, so it launches
+            // at login unless the member turned that off (autostart_wanted).
+            // An update removes it, so it is restored on the first start of a
+            // new version, and only then (see `version_changed`).
             if !db.list_servers().is_empty() {
                 app.state::<AppState>().start_all();
-                if db.get_setting("autostart_configured").is_none() {
-                    use tauri_plugin_autostart::ManagerExt;
-                    if app.autolaunch().enable().is_ok() {
-                        db.set_setting("autostart_configured", "1");
-                    }
+                let current = env!("CARGO_PKG_VERSION");
+                let last_run = db.get_setting("last_run_version");
+                if version_changed(last_run.as_deref(), current) {
+                    ensure_autostart(app.handle(), &db);
+                    db.set_setting("last_run_version", current);
                 }
             }
 
@@ -1067,4 +1126,36 @@ pub fn run() {
         })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_member_without_a_stored_wish_gets_autostart_once() {
+        assert_eq!(autostart_action(None, false), (true, true));
+        assert_eq!(autostart_action(None, true), (true, false));
+    }
+
+    #[test]
+    fn autostart_wanted_is_restored_when_an_update_removed_it() {
+        assert_eq!(autostart_action(Some("1"), false), (false, true));
+        assert_eq!(autostart_action(Some("1"), true), (false, false));
+    }
+
+    #[test]
+    fn autostart_is_checked_only_when_the_version_changed() {
+        // Absent: a first start, or an upgrade from a version before 0.7.1.
+        assert!(version_changed(None, "0.7.1"));
+        assert!(version_changed(Some("0.7.0"), "0.7.1"));
+        // Same version: an "off" set outside the app must stand.
+        assert!(!version_changed(Some("0.7.1"), "0.7.1"));
+    }
+
+    #[test]
+    fn autostart_turned_off_is_never_touched() {
+        assert_eq!(autostart_action(Some("0"), false), (false, false));
+        assert_eq!(autostart_action(Some("0"), true), (false, false));
+    }
 }

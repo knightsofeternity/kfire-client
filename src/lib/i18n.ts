@@ -82,6 +82,7 @@ const en = {
   "field.cs": "CS",
   "field.gold": "Gold",
   "field.time": "Game time",
+  "field.rating": "Rating",
 
   "result.win": "Win",
   "result.loss": "Loss",
@@ -94,6 +95,11 @@ const en = {
   "hs.mode.battlegrounds": "Battlegrounds",
   "hs.mode.constructed": "Regular game",
   "hs.turns": "{n} turns",
+  "hs.hdt": "Read my rating from Hearthstone Deck Tracker",
+  "hs.hdtSub": "Battlegrounds solo, when Hearthstone Deck Tracker is running",
+  "hs.hdtMissing": "Hearthstone Deck Tracker not detected.",
+  "hs.hdtGet": "Get it",
+  "hs.hdtNotFound": "No rating found for your last match: was Hearthstone Deck Tracker running?",
 
   "rl.name": "Your in-game name (exactly as shown)",
   "rl.namePlaceholder": "e.g. DonZeZe",
@@ -198,6 +204,7 @@ const fr: Record<Key, string> = {
   "field.cs": "Sbires",
   "field.gold": "Or",
   "field.time": "Temps de jeu",
+  "field.rating": "Cote",
 
   "result.win": "Victoire",
   "result.loss": "Défaite",
@@ -210,6 +217,11 @@ const fr: Record<Key, string> = {
   "hs.mode.battlegrounds": "Champs de bataille",
   "hs.mode.constructed": "Partie classique",
   "hs.turns": "{n} tours",
+  "hs.hdt": "Lire ma cote depuis Hearthstone Deck Tracker",
+  "hs.hdtSub": "Champs de bataille en solo, quand Hearthstone Deck Tracker est lancé",
+  "hs.hdtMissing": "Hearthstone Deck Tracker non détecté.",
+  "hs.hdtGet": "Le télécharger",
+  "hs.hdtNotFound": "Cote introuvable pour votre dernière partie : Hearthstone Deck Tracker était-il lancé ?",
 
   "rl.name": "Votre pseudo en jeu (exactement comme affiché)",
   "rl.namePlaceholder": "ex. DonZeZe",
