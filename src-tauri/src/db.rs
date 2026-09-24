@@ -420,6 +420,25 @@ impl Db {
         }
     }
 
+    /// Rewrites the payload of an event still waiting to be sent, and says how
+    /// many rows it touched: 0 means it already left (or was never queued).
+    pub fn update_pending_payload(
+        &self,
+        server_id: &str,
+        event_type: &str,
+        game_slug: &str,
+        ts: &str,
+        payload: &str,
+    ) -> usize {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE pending_events SET payload = ?5
+             WHERE server_id = ?1 AND type = ?2 AND game_slug = ?3 AND ts = ?4",
+            params![server_id, event_type, game_slug, ts, payload],
+        )
+        .unwrap_or(0)
+    }
+
     pub fn delete_event(&self, id: i64) {
         let conn = self.conn.lock().unwrap();
         let _ = conn.execute("DELETE FROM pending_events WHERE id = ?1", params![id]);
@@ -567,6 +586,31 @@ mod tests {
         assert_eq!(
             events[1].payload.as_deref(),
             Some(r#"{"mode":"battlegrounds"}"#)
+        );
+    }
+
+    #[test]
+    fn a_pending_payload_can_be_rewritten_until_it_is_sent() {
+        let db = mem();
+        let a = db.add_server("https://a", "r", "A");
+        let b = db.add_server("https://b", "r", "B");
+        db.queue_event(&a, "match_result", "hearthstone", "t1", Some("old"));
+        db.queue_event(&b, "match_result", "hearthstone", "t1", Some("old"));
+
+        assert_eq!(
+            db.update_pending_payload(&a, "match_result", "hearthstone", "t1", "new"),
+            1
+        );
+        assert_eq!(db.pending_events(&a)[0].payload.as_deref(), Some("new"));
+        // Another server's row is its own.
+        assert_eq!(db.pending_events(&b)[0].payload.as_deref(), Some("old"));
+
+        // Once sent (deleted), there is nothing left to rewrite.
+        let id = db.pending_events(&a)[0].id;
+        db.delete_event(id);
+        assert_eq!(
+            db.update_pending_payload(&a, "match_result", "hearthstone", "t1", "newer"),
+            0
         );
     }
 }
