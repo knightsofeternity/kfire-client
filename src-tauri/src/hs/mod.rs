@@ -151,6 +151,9 @@ pub fn start_watching(
                 // timer work it out, so the card goes away at once.
                 broadcast(ended_payload(SLUG));
                 let played_at = m.played_at(start);
+                // Remembered before any question of recipients: it is what the
+                // member played, shown in the client even if no server gets it.
+                db.remember_last_match(SLUG, &payload(&m, SLUG, played_at));
                 let servers: Vec<(String, String)> = db
                     .list_servers()
                     .into_iter()

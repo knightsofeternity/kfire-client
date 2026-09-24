@@ -286,6 +286,19 @@ impl Db {
         self.get_setting("expired_server_url")
     }
 
+    /// Keeps the last match a game module recorded, for the client window only.
+    /// The queue forgets a match once it is sent; the member still wants to see
+    /// what was counted. One per game, the payload exactly as it was queued.
+    pub fn remember_last_match(&self, slug: &str, payload: &serde_json::Value) {
+        self.set_setting(&format!("last_match:{slug}"), &payload.to_string());
+    }
+
+    /// The last match remembered for `slug`, if any and still readable.
+    pub fn last_match(&self, slug: &str) -> Option<serde_json::Value> {
+        self.get_setting(&format!("last_match:{slug}"))
+            .and_then(|s| serde_json::from_str(&s).ok())
+    }
+
     // --- games catalog (per server) ----------------------------------------
 
     pub fn replace_games(&self, server_id: &str, games: &[CachedGame]) -> rusqlite::Result<()> {
@@ -471,6 +484,24 @@ mod tests {
         let a = db.add_server("https://kfire.example.org", "ra", "Guild A");
         db.remove_server(&a);
         assert_eq!(db.expired_server_url(), None);
+    }
+
+    #[test]
+    fn the_last_match_is_remembered_per_game() {
+        let db = mem();
+        assert!(db.last_match("hearthstone").is_none());
+        db.remember_last_match("hearthstone", &serde_json::json!({"placement": 3}));
+        db.remember_last_match("hearthstone", &serde_json::json!({"placement": 1}));
+        db.remember_last_match("rocket-league", &serde_json::json!({"result": "win"}));
+        assert_eq!(db.last_match("hearthstone").unwrap()["placement"], 1, "the last one wins");
+        assert_eq!(db.last_match("rocket-league").unwrap()["result"], "win");
+    }
+
+    #[test]
+    fn a_corrupt_last_match_reads_as_none() {
+        let db = mem();
+        db.set_setting("last_match:hearthstone", "not json");
+        assert!(db.last_match("hearthstone").is_none());
     }
 
     #[test]
