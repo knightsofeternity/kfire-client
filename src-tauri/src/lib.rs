@@ -285,13 +285,9 @@ async fn poll_until_linked(
                     }
                     app.state::<AppState>().start_session(&server_id);
 
-                    // First successful link: default to launch-at-login (set once).
-                    if db.get_setting("autostart_configured").is_none() {
-                        use tauri_plugin_autostart::ManagerExt;
-                        if app.autolaunch().enable().is_ok() {
-                            db.set_setting("autostart_configured", "1");
-                        }
-                    }
+                    // First successful link: launch at login by default,
+                    // then whatever the member wants.
+                    ensure_autostart(&app, &db);
                 }
                 return;
             }
@@ -332,8 +328,8 @@ fn get_autostart(app: tauri::AppHandle) -> Result<bool, String> {
     app.autolaunch().is_enabled().map_err(|e| e.to_string())
 }
 
-/// Register/unregister the app to launch at login. The choice is remembered so
-/// the first-link default never overrides what the user picked here.
+/// Register/unregister the app to launch at login. The choice is remembered as
+/// the member's wish (`autostart_wanted`), which startup keeps applying.
 #[tauri::command]
 fn set_autostart(
     app: tauri::AppHandle,
@@ -348,8 +344,41 @@ fn set_autostart(
         manager.disable()
     };
     res.map_err(|e| e.to_string())?;
-    state.db.set_setting("autostart_configured", "1");
+    let wanted = if enabled { "1" } else { "0" };
+    state.db.set_setting("autostart_wanted", wanted);
     Ok(())
+}
+
+/// What to do about launch at login, given the member's stored wish and
+/// whether it is registered right now: (store the wish "1", enable it).
+///
+/// No wish yet means "on", once. A wish of "1" is re-applied whenever it went
+/// missing: installing an update runs the old uninstaller, which removes the
+/// registration. A wish of "0" is never touched.
+fn autostart_action(stored_wanted: Option<&str>, enabled_now: bool) -> (bool, bool) {
+    match stored_wanted {
+        None => (true, !enabled_now),
+        Some("1") => (false, !enabled_now),
+        Some(_) => (false, false),
+    }
+}
+
+/// Keeps launch at login in line with the member's wish, see `autostart_action`.
+fn ensure_autostart(app: &tauri::AppHandle, db: &Db) {
+    use tauri_plugin_autostart::ManagerExt;
+    let manager = app.autolaunch();
+    let enabled_now = manager.is_enabled().unwrap_or(false);
+    let stored = db.get_setting("autostart_wanted");
+    let (store, enable) = autostart_action(stored.as_deref(), enabled_now);
+    if store {
+        db.set_setting("autostart_wanted", "1");
+    }
+    if enable {
+        match manager.enable() {
+            Ok(()) => log::info!("autostart: launch at login restored"),
+            Err(e) => log::warn!("autostart: could not enable launch at login: {e}"),
+        }
+    }
 }
 
 #[tauri::command]
@@ -1049,17 +1078,12 @@ pub fn run() {
             app.manage(state);
 
             // Auto-resume every linked server's session (offline ones stay
-            // stopped). A presence app runs in the background, so default to
-            // launch-at-login the first time we're linked - but only set it
-            // once, then the user's toggle (autostart_configured) wins forever.
+            // stopped). A presence app runs in the background, so it launches
+            // at login unless the member turned that off (autostart_wanted),
+            // and it is restored at every start, since an update removes it.
             if !db.list_servers().is_empty() {
                 app.state::<AppState>().start_all();
-                if db.get_setting("autostart_configured").is_none() {
-                    use tauri_plugin_autostart::ManagerExt;
-                    if app.autolaunch().enable().is_ok() {
-                        db.set_setting("autostart_configured", "1");
-                    }
-                }
+                ensure_autostart(app.handle(), &db);
             }
 
             // --- system tray (menu/icon/tooltip filled by rebuild_tray) -------
@@ -1082,4 +1106,27 @@ pub fn run() {
         })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_member_without_a_stored_wish_gets_autostart_once() {
+        assert_eq!(autostart_action(None, false), (true, true));
+        assert_eq!(autostart_action(None, true), (true, false));
+    }
+
+    #[test]
+    fn autostart_wanted_is_restored_when_an_update_removed_it() {
+        assert_eq!(autostart_action(Some("1"), false), (false, true));
+        assert_eq!(autostart_action(Some("1"), true), (false, false));
+    }
+
+    #[test]
+    fn autostart_turned_off_is_never_touched() {
+        assert_eq!(autostart_action(Some("0"), false), (false, false));
+        assert_eq!(autostart_action(Some("0"), true), (false, false));
+    }
 }
