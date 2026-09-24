@@ -22,6 +22,7 @@ function savedTab(): Tab {
 class AppState {
   loaded = $state(false);
   tab = $state<Tab>(savedTab());
+  now = $state(new Date());
 
   servers = $state<UiServer[]>([]);
   statuses = $state<Record<string, { status: ServerStatus; detail: string }>>({});
@@ -77,6 +78,7 @@ class AppState {
   }
 
   async refresh() {
+    this.now = new Date();
     const s = await invoke<UiState>("get_state");
     this.servers = s.servers;
     this.globalStatus = s.global_status;
@@ -150,11 +152,13 @@ class AppState {
   }
 
   async loadRl() {
+    const previous = this.rl?.player_name;
     try {
       const s = await invoke<Omit<RlStatus, keyof RlLive | "last_mismatch"> & { last_mismatch: string }>("rl_status");
       const live = await invoke<RlLive>("rl_live");
       this.rl = { ...s, ...live };
-      this.rlName = this.rl.player_name;
+      // Ne pas écraser un nom que le membre est en train de taper.
+      if (previous === undefined || this.rlName === previous) this.rlName = this.rl.player_name;
     } catch {
       this.rl = null;
     }
@@ -272,12 +276,14 @@ class AppState {
 
   /** Starts polling and listening; returns the cleanup for onMount. */
   init(): () => void {
-    this.refresh();
+    this.refresh().catch((e) => console.warn("refresh failed", e));
     this.checkForUpdate();
     this.loadHs();
     this.loadRl();
     this.loadLol();
-    const interval = setInterval(() => this.refresh(), 4000);
+    const interval = setInterval(() => {
+      this.refresh().catch((e) => console.warn("refresh failed", e));
+    }, 4000);
     const unsubs = [
       listen<StatusEvent>("kfire://status", (e) => {
         const { server_id, status, detail } = e.payload;
@@ -296,13 +302,20 @@ class AppState {
           this.linking = false;
           this.adding = false;
           this.serverUrl = "";
-          this.refresh();
+          this.refresh().catch((e) => console.warn("refresh failed", e));
         }
-        if (status === "logged_out") this.refresh();
+        if (status === "logged_out") this.refresh().catch((e) => console.warn("refresh failed", e));
       }),
-      listen("kfire://detection", () => this.refresh()),
+      listen("kfire://detection", () => {
+        this.refresh().catch((e) => console.warn("refresh failed", e));
+        this.loadHs();
+        this.loadRl();
+      }),
       // The moment the member actually looks at the window.
-      listen(TauriEvent.WINDOW_FOCUS, () => this.pollRl()),
+      listen(TauriEvent.WINDOW_FOCUS, () => {
+        this.loadHs();
+        this.loadRl();
+      }),
     ];
     return () => {
       clearInterval(interval);

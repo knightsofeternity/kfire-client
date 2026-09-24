@@ -20,7 +20,7 @@
   fields={fields.map((f) => t(f))}
   privacy={t("hs.private")}
   error={app.hsError}
-  lastMatch={hsSummary(app.hs?.last_match ?? null, new Date(), lang)}
+  lastMatch={hsSummary(app.hs?.last_match ?? null, app.now, lang)}
   techPath={app.hs?.config_path ?? ""}
   techBlock={app.hs?.config_block ?? ""}
 >

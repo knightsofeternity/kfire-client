@@ -20,7 +20,7 @@
   fields={fields.map((f) => t(f))}
   privacy={t("rl.private")}
   error={app.rlError}
-  lastMatch={rlSummary(app.rl?.last_match ?? null, new Date(), lang)}
+  lastMatch={rlSummary(app.rl?.last_match ?? null, app.now, lang)}
   techPath={app.rl?.config_path ?? ""}
   techBlock={app.rl?.config_block ?? ""}
 >

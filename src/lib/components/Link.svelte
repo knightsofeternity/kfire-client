@@ -31,9 +31,6 @@
       <button class="btn" type="submit" disabled={app.linking}>
         {app.linking ? t("link.opening") : t("link.submit")}
       </button>
-      {#if app.servers.length > 0}
-        <button type="button" class="btn ghost" onclick={() => app.cancel()}>{t("common.cancel")}</button>
-      {/if}
     </form>
   {/if}
   <Footer />
