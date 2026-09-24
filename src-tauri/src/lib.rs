@@ -286,8 +286,11 @@ async fn poll_until_linked(
                     app.state::<AppState>().start_session(&server_id);
 
                     // First successful link: launch at login by default,
-                    // then whatever the member wants.
+                    // then whatever the member wants. The version is recorded
+                    // here too, or the next start of this same version would
+                    // check again and undo an "off" set outside the app.
                     ensure_autostart(&app, &db);
+                    db.set_setting("last_run_version", env!("CARGO_PKG_VERSION"));
                 }
                 return;
             }
