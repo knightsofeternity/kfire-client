@@ -15,13 +15,23 @@ use std::path::PathBuf;
 /// Where members get HDT, shown when it is not installed.
 pub const DOWNLOAD_URL: &str = "https://hsreplay.net/downloads/";
 
-/// How far apart our end of match and HDT's may be to be the same game.
-const MATCH_WINDOW: i64 = 3 * 60;
+/// How long after our end of match HDT's own end may be, in seconds.
+///
+/// HDT records a game only when the player LEAVES the end screen, not when the
+/// game ends: on 2026-09-25 Djam's game ended at 11:14:22 and HDT wrote it at
+/// 11:15:17, after he went back to the lobby. Its EndTime is that moment, so
+/// it can trail ours by as long as the member lingers on the end screen.
+const MATCH_AFTER: i64 = 15 * 60;
 
-/// How long, and how often, the file is re-read after a match: HDT may write
-/// it a few seconds after we saw the end in the game's log.
-pub const WAIT_TOTAL: std::time::Duration = std::time::Duration::from_secs(30);
-pub const WAIT_STEP: std::time::Duration = std::time::Duration::from_secs(3);
+/// How much earlier than our end HDT's may be, in seconds: clock rounding
+/// only. Anything earlier is a PREVIOUS game, which the file still holds while
+/// HDT has not written the one just played.
+const MATCH_BEFORE: i64 = 60;
+
+/// How long, and how often, the file is re-read after a match. Long, because
+/// HDT writes the game only once the member leaves the end screen.
+pub const WAIT_TOTAL: std::time::Duration = std::time::Duration::from_secs(10 * 60);
+pub const WAIT_STEP: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// One Battlegrounds game as HDT recorded it, reduced to what KFIRE uses.
 #[derive(Debug, Clone, PartialEq)]
@@ -101,14 +111,15 @@ pub fn parse(xml: &str) -> Vec<HdtGame> {
 }
 
 /// The solo, non-friendly game that finished in `placement` closest to
-/// `ended_at`, within three minutes. Never another game's rating.
+/// `ended_at`: at most a minute before it, at most fifteen after. Never
+/// another game's rating.
 pub fn find_match(games: &[HdtGame], placement: i64, ended_at: DateTime<Utc>) -> Option<&HdtGame> {
     games
         .iter()
         .filter(|g| !g.duos && !g.friendly && g.placement == placement)
-        .map(|g| (g, (g.ended_at - ended_at).num_seconds().abs()))
-        .filter(|(_, d)| *d <= MATCH_WINDOW)
-        .min_by_key(|(_, d)| *d)
+        .map(|g| (g, (g.ended_at - ended_at).num_seconds()))
+        .filter(|(_, d)| (-MATCH_BEFORE..=MATCH_AFTER).contains(d))
+        .min_by_key(|(_, d)| d.abs())
         .map(|(g, _)| g)
 }
 
@@ -125,12 +136,14 @@ impl std::fmt::Display for Missing {
         f.write_str(match self {
             Missing::NoFile => "HDT file not found",
             Missing::Unreadable => "HDT file unreadable",
-            Missing::NotFound => "no solo game with this place within 3 minutes in HDT file",
+            Missing::NotFound => {
+                "no solo game with this place in HDT file, 1 min before to 15 min after"
+            }
         })
     }
 }
 
-/// Re-reads HDT's file until the game shows up, for thirty seconds at most.
+/// Re-reads HDT's file until the game shows up, for ten minutes at most.
 /// Blocking: call it from its own thread, never from the log follower.
 pub fn wait_for_rating(placement: i64, ended_at: DateTime<Utc>) -> Result<(i64, i64), Missing> {
     let Some(path) = file_path() else { return Err(Missing::NoFile) };
@@ -215,9 +228,37 @@ mod tests {
     }
 
     #[test]
-    fn never_takes_a_game_ended_more_than_three_minutes_away() {
+    fn djam_real_game_written_when_he_left_the_end_screen() {
+        // 2026-09-25: the game ended at 11:14:22 in Hearthstone's log, HDT
+        // wrote it at 11:15:17 when Djam went back to the lobby. The 30 s
+        // wait had given up by then.
+        let xml = r#"<Game Player="x" StartTime="2026-09-25T10:39:37.5393766+02:00" EndTime="2026-09-25T11:15:17.8134822+02:00" Hero="BG24_HERO_100" Rating="5965" RatingAfter="6037" Placemenent="2" FriendlyGame="false" Duos="false">"#;
+        let games = parse(xml);
+        let ended = Utc.with_ymd_and_hms(2026, 9, 25, 9, 14, 22).unwrap();
+        let found = find_match(&games, 2, ended).expect("found");
+        assert_eq!((found.rating, found.rating_after), (5965, 6037));
+    }
+
+    #[test]
+    fn never_takes_the_previous_game_with_the_same_place() {
+        // While HDT has not written the game just played yet, the file still
+        // holds the previous one. Same place, ten minutes earlier: not ours.
         let games = parse(XML);
-        assert!(find_match(&games, 2, utc(12, 48, 0)).is_none());
+        assert!(find_match(&games, 2, utc(12, 54, 26)).is_none());
+    }
+
+    #[test]
+    fn tolerates_a_minute_of_clock_difference_before_our_end() {
+        let games = parse(XML);
+        assert!(find_match(&games, 2, utc(12, 45, 20)).is_some());
+        assert!(find_match(&games, 2, utc(12, 45, 40)).is_none());
+    }
+
+    #[test]
+    fn never_takes_a_game_written_more_than_fifteen_minutes_after_ours() {
+        let games = parse(XML);
+        assert!(find_match(&games, 2, utc(12, 29, 0)).is_none());
+        assert!(find_match(&games, 2, utc(12, 30, 0)).is_some());
     }
 
     #[test]
@@ -225,12 +266,16 @@ mod tests {
         let xml = r#"<Game EndTime="2026-09-21T12:40:00Z" Rating="1" RatingAfter="10" Placemenent="2" FriendlyGame="false" Duos="false" />
 <Game EndTime="2026-09-21T12:44:00Z" Rating="1" RatingAfter="20" Placemenent="2" FriendlyGame="false" Duos="false" />"#;
         let games = parse(xml);
-        assert_eq!(find_match(&games, 2, utc(12, 43, 30)).unwrap().rating_after, 20);
+        assert_eq!(
+            find_match(&games, 2, utc(12, 39, 0)).unwrap().rating_after,
+            10
+        );
     }
 
     #[test]
     fn older_files_without_the_duos_attribute_read_as_solo() {
-        let xml = r#"<Game EndTime="2026-09-21T12:44:00Z" Rating="1" RatingAfter="2" Placemenent="2" />"#;
+        let xml =
+            r#"<Game EndTime="2026-09-21T12:44:00Z" Rating="1" RatingAfter="2" Placemenent="2" />"#;
         let games = parse(xml);
         assert!(!games[0].duos && !games[0].friendly);
     }

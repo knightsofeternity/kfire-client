@@ -344,9 +344,10 @@ pub fn start_watching(
                 // On disk at once, so quitting during the wait loses nothing;
                 // sent only once the rating is known or given up on.
                 let targets = queue_before_rating(&db, &m, played_at);
-                // HDT may write its file a few seconds after we saw the end:
+                // HDT writes the game when the member leaves the end screen:
                 // wait for it in a thread of its own, so the log follower
-                // never stalls, and never more than thirty seconds.
+                // never stalls, and never more than ten minutes: HDT writes the
+                // game only once the member leaves the end screen.
                 let (db, notify, m) = (db.clone(), notify.clone(), m);
                 std::thread::spawn(move || {
                     let placement = m.placement.unwrap_or_default();
