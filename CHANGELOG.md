@@ -7,6 +7,28 @@ Release, so every version MUST have its own section here before it is tagged.
 The release build fails when one is missing, which is deliberate: publishing a
 version under the previous one's notes has already happened once.
 
+## 0.7.1-beta.2
+
+Test build of 0.7.1, not offered by the update indicator.
+
+### The full Rocket League scoreboard
+
+At the end of a match, the client now also sends the other players' numbers:
+score, goals, assists, saves, shots, and whether they left before the end. Their
+names never leave your computer. On the portal, a match unfolds into the
+scoreboard of both teams, with guild members named and everyone else shown as
+a teammate or an opponent. When several members played the same match, the
+recap shows it once.
+
+### Your Battlegrounds rating is no longer lost on the end screen
+
+Hearthstone Deck Tracker saves a game only when you leave the end screen. The
+client gave up after 30 seconds, so staying to watch the end of the lobby lost
+your rating. It now waits up to ten minutes: the game is sent once you are back
+in the lobby.
+
+Includes everything in 0.7.1-beta.1.
+
 ## 0.7.1-beta.1
 
 Test build of 0.7.1, not offered by the update indicator.
