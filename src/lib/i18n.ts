@@ -99,7 +99,7 @@ const en = {
   "hs.hdtSub": "Battlegrounds solo, when Hearthstone Deck Tracker is running. Hearthstone Deck Tracker saves your rating when you leave the end screen, so the game is sent once you are back in the lobby.",
   "hs.hdtMissing": "Hearthstone Deck Tracker not detected.",
   "hs.hdtGet": "Get it",
-  "hs.hdtNotFound": "No rating found for your last match: was Hearthstone Deck Tracker running?",
+  "hs.hdtNotFound": "No rating found for your last match. Hearthstone Deck Tracker must be running, and it saves the rating when you leave the end screen: the client waits for it up to 10 minutes.",
 
   "rl.name": "Your in-game name (exactly as shown)",
   "rl.namePlaceholder": "e.g. DonZeZe",
@@ -221,7 +221,7 @@ const fr: Record<Key, string> = {
   "hs.hdtSub": "Champs de bataille en solo, quand Hearthstone Deck Tracker est lancé. Il enregistre votre cote quand vous quittez l'écran de fin : la partie est donc envoyée à votre retour au lobby.",
   "hs.hdtMissing": "Hearthstone Deck Tracker non détecté.",
   "hs.hdtGet": "Le télécharger",
-  "hs.hdtNotFound": "Cote introuvable pour votre dernière partie : Hearthstone Deck Tracker était-il lancé ?",
+  "hs.hdtNotFound": "Cote introuvable pour votre dernière partie. Hearthstone Deck Tracker doit être lancé, et il enregistre la cote quand vous quittez l'écran de fin : le client l'attend jusqu'à 10 minutes.",
 
   "rl.name": "Votre pseudo en jeu (exactement comme affiché)",
   "rl.namePlaceholder": "ex. DonZeZe",
