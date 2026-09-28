@@ -769,7 +769,8 @@ fn rebuild_tray(app: &tauri::AppHandle) {
         let mk = |id: &str, label: &str, on: bool| {
             CheckMenuItem::with_id(app, format!("s:{}:{id}", s.id), label, true, on, None::<&str>)
         };
-        let (inh, on, inv, off, unlink, sep) = match (
+        let (portal, inh, on, inv, off, unlink, sep) = match (
+            MenuItem::with_id(app, format!("o:{}", s.id), "Open the portal", true, None::<&str>),
             mk("inherit", "Use global", ov("inherit")),
             mk("online", "Online", ov("online")),
             mk("invisible", "Invisible", ov("invisible")),
@@ -777,12 +778,12 @@ fn rebuild_tray(app: &tauri::AppHandle) {
             MenuItem::with_id(app, format!("u:{}", s.id), "Unlink", true, None::<&str>),
             PredefinedMenuItem::separator(app),
         ) {
-            (Ok(a), Ok(b), Ok(c), Ok(d), Ok(e), Ok(f)) => (a, b, c, d, e, f),
+            (Ok(p), Ok(a), Ok(b), Ok(c), Ok(d), Ok(e), Ok(f)) => (p, a, b, c, d, e, f),
             _ => return,
         };
         let name = if s.org_name.is_empty() { &s.url } else { &s.org_name };
         let label = format!("{name} — {}", server_state_word(&eff, conn.get(&s.id)));
-        let items: [&dyn IsMenuItem<tauri::Wry>; 6] = [&inh, &on, &inv, &off, &sep, &unlink];
+        let items: [&dyn IsMenuItem<tauri::Wry>; 7] = [&portal, &inh, &on, &inv, &off, &sep, &unlink];
         if let Ok(sub) = Submenu::with_items(app, label, true, &items) {
             server_subs.push(sub);
         }
@@ -853,6 +854,13 @@ fn rebuild_tray(app: &tauri::AppHandle) {
     }
 }
 
+/// The web portal of a linked server: its stored URL, trimmed of the spaces
+/// and trailing slash a member may have typed. Same normalisation as the API
+/// client, which learned it from a real paste with a trailing space.
+fn portal_url(server_url: &str) -> String {
+    server_url.trim().trim_end_matches('/').to_string()
+}
+
 /// Handles a tray menu click: status changes, unlink, window, quit.
 fn handle_tray_menu(app: &tauri::AppHandle, id: &str) {
     match id {
@@ -896,6 +904,13 @@ fn handle_tray_menu(app: &tauri::AppHandle, id: &str) {
                     state.apply_server_status(&server_id);
                     rebuild_tray(&app);
                 });
+            }
+        }
+        id if id.starts_with("o:") => {
+            // Opens the server's web portal in the default browser.
+            if let Some(server) = app.state::<AppState>().db.get_server(&id[2..]) {
+                use tauri_plugin_opener::OpenerExt;
+                let _ = app.opener().open_url(portal_url(&server.url), None::<&str>);
             }
         }
         id if id.starts_with("u:") => {
@@ -1130,6 +1145,12 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_portal_url_drops_spaces_and_trailing_slashes() {
+        assert_eq!(super::portal_url(" https://kfire.guilde-ke.fr/ \n"), "https://kfire.guilde-ke.fr");
+        assert_eq!(super::portal_url("https://kfire.guilde-ke.fr"), "https://kfire.guilde-ke.fr");
+    }
+
     use super::*;
 
     #[test]
