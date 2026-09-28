@@ -29,6 +29,8 @@ export type HsStatus = {
   config_path: string;
   config_block: string;
   install_dir: string | null;
+  hdt_available: boolean;
+  hdt_enabled: boolean;
   last_match: MatchPayload | null;
 };
 export type RlLive = {

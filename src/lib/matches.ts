@@ -39,6 +39,11 @@ export function hsSummary(p: MatchPayload | null, now: Date, lang: Lang): Summar
   const outcome = bg && placement ? ordinal(placement, lang) : resultLabel(p.result, lang);
   const parts = [ago(String(p.played_at ?? ""), now, lang)];
   if (typeof p.turns === "number") parts.push(translate(lang, "hs.turns", { n: p.turns }));
+  if (typeof p.rating === "number" && typeof p.rating_after === "number") {
+    const nf = new Intl.NumberFormat(lang);
+    const d = p.rating_after - p.rating;
+    parts.push(`${nf.format(p.rating)} → ${nf.format(p.rating_after)} (${d >= 0 ? "+" : ""}${d})`);
+  }
   return {
     title: `${mode} · ${outcome}`,
     detail: parts.filter(Boolean).join(" · "),

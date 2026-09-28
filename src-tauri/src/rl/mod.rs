@@ -45,6 +45,25 @@ pub fn payload(s: &parser::Summary, slug: &str, played_at: chrono::DateTime<chro
     o.insert("mvp".into(), s.mvp.into());
     o.insert("duration_seconds".into(), s.duration_seconds.into());
     o.insert("played_at".into(), played_at.to_rfc3339().into());
+    // The scoreboard half travels whole or not at all: the server refuses a
+    // key without players and players without a key.
+    if let Some(k) = &s.match_key {
+        if !s.others.is_empty() {
+            o.insert("match_key".into(), k.clone().into());
+            let others: Vec<Value> = s
+                .others
+                .iter()
+                .map(|p| {
+                    json!({
+                        "team": p.team, "score": p.score, "goals": p.goals,
+                        "assists": p.assists, "saves": p.saves, "shots": p.shots,
+                        "demos": p.demos, "left": p.left,
+                    })
+                })
+                .collect();
+            o.insert("others".into(), Value::Array(others));
+        }
+    }
     Value::Object(o)
 }
 
@@ -386,6 +405,62 @@ mod tests {
             demos: 1,
             mvp: true,
             duration_seconds: 330,
+            match_key: None,
+            others: vec![],
+        }
+    }
+
+    fn a_summary_with_board() -> Summary {
+        let mut s = a_summary();
+        s.match_key = Some(crate::rl::parser::match_key("g-1"));
+        s.others = vec![crate::rl::parser::Other {
+            team: 1,
+            score: 200,
+            goals: 1,
+            assists: 0,
+            saves: 1,
+            shots: 4,
+            demos: 0,
+            left: false,
+        }];
+        s
+    }
+
+    #[test]
+    fn the_payload_carries_the_board_as_numbers_only() {
+        let v = payload(&a_summary_with_board(), SLUG, at());
+        let o = v.as_object().unwrap();
+        assert_eq!(o.len(), 18, "the 16 fields plus match_key and others");
+        assert_eq!(o["match_key"].as_str().unwrap().len(), 64);
+        let other = o["others"][0].as_object().unwrap();
+        let mut keys: Vec<&str> = other.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["assists", "demos", "goals", "left", "saves", "score", "shots", "team"]
+        );
+    }
+
+    #[test]
+    fn no_name_of_the_stream_ever_reaches_the_payload() {
+        // Built from a real-shaped stream, not by hand: the proof must cover
+        // what the parser actually keeps.
+        let mut m = crate::rl::parser::Match::new("Bushido");
+        m.observe(&serde_json::json!({
+            "MatchGuid": "g-real",
+            "Game": {"TimeSeconds": 0, "Teams": [{"TeamNum": 0, "Score": 2}, {"TeamNum": 1, "Score": 1}]},
+            "Players": [
+                {"Name": "Bushido", "TeamNum": 0, "Score": 400, "Goals": 2},
+                {"Name": "Coequipier", "TeamNum": 0, "Score": 200, "Goals": 0},
+                {"Name": "Adversaire1", "TeamNum": 1, "Score": 150, "Goals": 1},
+                {"Name": "Adversaire2", "TeamNum": 1, "Score": 90, "Goals": 0},
+            ],
+        }));
+        let s = m.finish(300).unwrap();
+        assert_eq!(s.others.len(), 3);
+        let raw = payload(&s, SLUG, at()).to_string();
+        for forbidden in ["Bushido", "Coequipier", "Adversaire1", "Adversaire2", "g-real", "Name"] {
+            assert!(!raw.contains(forbidden), "{forbidden} leaked into {raw}");
         }
     }
 

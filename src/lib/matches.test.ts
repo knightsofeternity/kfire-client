@@ -58,6 +58,22 @@ describe("hsSummary", () => {
     expect(JSON.stringify(s)).not.toContain("BG36");
   });
   it("returns null without a payload", () => expect(hsSummary(null, now, "fr")).toBeNull());
+  it("adds the rating change when HDT recorded it", () => {
+    const s = hsSummary(
+      { mode: "battlegrounds", result: "loss", placement: 2, turns: 18, rating: 5571, rating_after: 5644, played_at: "2026-09-24T11:48:00Z" },
+      now,
+      "fr",
+    );
+    expect(s?.detail).toBe("il y a 12 min · 18 tours · 5 571 → 5 644 (+73)");
+  });
+  it("shows a loss of rating with its sign", () => {
+    const s = hsSummary(
+      { mode: "battlegrounds", result: "loss", placement: 6, rating: 5644, rating_after: 5603, played_at: "2026-09-24T11:48:00Z" },
+      now,
+      "en",
+    );
+    expect(s?.detail).toBe("12 min. ago · 5,644 → 5,603 (-41)");
+  });
 });
 
 describe("rlSummary", () => {

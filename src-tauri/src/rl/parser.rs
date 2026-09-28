@@ -1,8 +1,8 @@
 //! Reading a Rocket League match, in pure functions.
 //!
 //! The full scoresheet, which carries every player's name, lives here and goes
-//! no further. This module uses it to compute, and lets out nothing but facts
-//! about the member.
+//! no further. This module uses it to compute, and lets out facts about the
+//! member, plus the other players' numbers without their names.
 
 use serde_json::Value;
 
@@ -19,6 +19,35 @@ pub const RANKED: &[i64] = &[10, 11, 13, 27, 28, 29, 30];
 /// it is that this set serves only to write ONE log line, and a log line needs
 /// no more than that. A real match holds eight at most, substitutes included.
 const MAX_NAMES_SEEN: usize = 32;
+
+/// How many other players a summary carries at most: four against four, minus
+/// the member. The server refuses more.
+const MAX_OTHERS: usize = 7;
+
+/// The match's identifier as it leaves this machine: the SHA-256 of the game's
+/// `MatchGuid`, in lowercase hex.
+///
+/// Every member of the same match computes the same key, which is how the
+/// server groups their reports; the raw GUID stays here.
+pub fn match_key(guid: &str) -> String {
+    use sha2::{Digest, Sha256};
+    format!("{:x}", Sha256::digest(guid.as_bytes()))
+}
+
+/// Another player of the match, reduced to numbers. Their name is only the key
+/// `Match` keeps them under, and never leaves it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Other {
+    pub team: i64,
+    pub score: i64,
+    pub goals: i64,
+    pub assists: i64,
+    pub saves: i64,
+    pub shots: i64,
+    pub demos: i64,
+    /// Seen during the match, absent from the latest state: they left.
+    pub left: bool,
+}
 
 /// Whether this playlist is ranked.
 pub fn is_ranked(playlist: i64) -> bool {
@@ -86,6 +115,11 @@ pub struct Summary {
     pub demos: i64,
     pub mvp: bool,
     pub duration_seconds: i64,
+    /// `None` when the game never sent a `MatchGuid`: then `others` is empty
+    /// and the match is reported as before the scoreboard existed.
+    pub match_key: Option<String>,
+    /// The other players, by team then score, never in the stream's order.
+    pub others: Vec<Other>,
 }
 
 /// A match's current state, for the live feed. Never written, never replayed.
@@ -147,6 +181,9 @@ pub struct Match {
     /// Without that, a mistyped name produces nothing at all and stays
     /// impossible to diagnose.
     names_seen: std::collections::BTreeSet<String>,
+    /// Every other player's latest line, keyed by name. The names never leave
+    /// this struct: `finish()` emits the values only.
+    others: std::collections::BTreeMap<String, Other>,
 }
 
 fn i(v: &Value, k: &str) -> i64 {
@@ -185,6 +222,7 @@ impl Match {
             best_orange: 0,
             seen: false,
             names_seen: Default::default(),
+            others: Default::default(),
         }
     }
 
@@ -236,6 +274,8 @@ impl Match {
         };
 
         let (mut blue_n, mut orange_n) = (0i64, 0i64);
+        // Borrowed from the frame, so marking who left costs no allocation.
+        let mut present: Vec<&str> = Vec::with_capacity(players.len());
         for p in players {
             let team = i(p, "TeamNum");
             let score = i(p, "Score");
@@ -250,7 +290,8 @@ impl Match {
                 }
                 _ => {}
             }
-            if let Some(n) = p.get("Name").and_then(Value::as_str) {
+            let name = p.get("Name").and_then(Value::as_str);
+            if let Some(n) = name {
                 // contains() takes a &str without allocating; only a genuinely
                 // new name pays for a String, so a handful per match instead of
                 // one per player per frame.
@@ -258,7 +299,7 @@ impl Match {
                     self.names_seen.insert(n.to_string());
                 }
             }
-            if same_player(p.get("Name").and_then(Value::as_str), &self.member) {
+            if same_player(name, &self.member) {
                 self.mine = Some(Stats {
                     team,
                     goals: i(p, "Goals"),
@@ -268,7 +309,27 @@ impl Match {
                     score,
                     demos: i(p, "Demos"),
                 });
+            } else if let Some(n) = name {
+                present.push(n);
+                let line = Other {
+                    team,
+                    score,
+                    goals: i(p, "Goals"),
+                    assists: i(p, "Assists"),
+                    saves: i(p, "Saves"),
+                    shots: i(p, "Shots"),
+                    demos: i(p, "Demos"),
+                    left: false,
+                };
+                if let Some(o) = self.others.get_mut(n) {
+                    *o = line;
+                } else if self.others.len() < MAX_NAMES_SEEN {
+                    self.others.insert(n.to_string(), line);
+                }
             }
+        }
+        for (name, o) in self.others.iter_mut() {
+            o.left = !present.contains(&name.as_str());
         }
         self.max_players_blue = self.max_players_blue.max(blue_n);
         self.max_players_orange = self.max_players_orange.max(orange_n);
@@ -278,6 +339,19 @@ impl Match {
     /// The names met during the match, for the LOCAL log only.
     pub fn names_seen(&self) -> Vec<String> {
         self.names_seen.iter().cloned().collect()
+    }
+
+    /// The other players as the summary carries them.
+    ///
+    /// Players still present come first when there are more than seven, so a
+    /// match with substitutes keeps those who finished it. Then by team and
+    /// score: the order players arrived in must not show through.
+    fn others_for_summary(&self) -> Vec<Other> {
+        let mut v: Vec<Other> = self.others.values().cloned().collect();
+        v.sort_by_key(|o| (o.left, std::cmp::Reverse(o.score)));
+        v.truncate(MAX_OTHERS);
+        v.sort_by_key(|o| (o.team, std::cmp::Reverse(o.score)));
+        v
     }
 
     /// The current state, for the live feed.
@@ -352,6 +426,13 @@ impl Match {
         };
         let mvp = result == "win" && mine.score >= best_of_mine;
 
+        let match_key = self.guid.as_deref().map(match_key);
+        let others = if match_key.is_some() {
+            self.others_for_summary()
+        } else {
+            Vec::new()
+        };
+
         Ok(Summary {
             playlist: self.playlist,
             team_size,
@@ -367,6 +448,8 @@ impl Match {
             demos: mine.demos,
             mvp,
             duration_seconds: duration_seconds.clamp(0, 7200),
+            match_key,
+            others,
         })
     }
 }
@@ -750,5 +833,130 @@ mod tests {
             m.observe(&state(13, 0, 0, json!([them(&format!("joueur{n}"), 0, 1)])));
         }
         assert_eq!(m.names_seen().len(), MAX_NAMES_SEEN);
+    }
+
+    fn named(name: &str, team: i64, score: i64, goals: i64) -> serde_json::Value {
+        json!({"Name": name, "TeamNum": team, "Goals": goals,
+               "Assists": 1, "Saves": 0, "Shots": 2, "Score": score, "Demos": 0})
+    }
+
+    #[test]
+    fn les_autres_joueurs_sont_gardes_sans_nom_par_equipe_et_score() {
+        let mut m = Match::new("Bushido");
+        m.observe(&state(
+            -1,
+            3,
+            1,
+            json!([
+                me(0, 2),
+                named("Zed", 1, 150, 1),
+                named("Alpha", 0, 300, 1),
+                named("Moe", 1, 400, 0),
+            ]),
+        ));
+        let s = m.finish(300).unwrap();
+        assert_eq!(s.match_key.as_deref(), Some(match_key("g-1").as_str()));
+        let order: Vec<(i64, i64)> = s.others.iter().map(|o| (o.team, o.score)).collect();
+        assert_eq!(order, vec![(0, 300), (1, 400), (1, 150)]);
+        assert!(s.others.iter().all(|o| !o.left));
+    }
+
+    #[test]
+    fn un_joueur_parti_garde_sa_derniere_ligne() {
+        let mut m = Match::new("Bushido");
+        m.observe(&state(
+            -1,
+            0,
+            0,
+            json!([
+                me(0, 0),
+                named("Fuyard", 1, 80, 0),
+                named("Reste", 1, 50, 0)
+            ]),
+        ));
+        m.observe(&state(
+            -1,
+            1,
+            0,
+            json!([me(0, 1), named("Reste", 1, 60, 0)]),
+        ));
+        let s = m.finish(300).unwrap();
+        let fuyard = s
+            .others
+            .iter()
+            .find(|o| o.score == 80)
+            .expect("le fuyard est garde");
+        assert!(fuyard.left);
+        let reste = s
+            .others
+            .iter()
+            .find(|o| o.score == 60)
+            .expect("la ligne la plus recente");
+        assert!(!reste.left);
+    }
+
+    #[test]
+    fn sans_match_guid_ni_cle_ni_autres_joueurs() {
+        let mut frame = state(-1, 1, 0, json!([me(0, 1), named("X", 1, 10, 0)]));
+        frame.as_object_mut().unwrap().remove("MatchGuid");
+        let mut m = Match::new("Bushido");
+        m.observe(&frame);
+        let s = m.finish(300).unwrap();
+        assert_eq!(s.match_key, None);
+        assert!(s.others.is_empty());
+    }
+
+    #[test]
+    fn la_cle_est_stable_et_distincte() {
+        assert_eq!(match_key("abc"), match_key("abc"));
+        assert_ne!(match_key("abc"), match_key("abd"));
+        let k = match_key("abc");
+        assert_eq!(k.len(), 64);
+        assert!(k
+            .chars()
+            .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c)));
+    }
+
+    #[test]
+    fn au_plus_sept_autres_joueurs_les_presents_d_abord() {
+        // 4v4 : sept autres joueurs a la fois. Deux coequipiers quittent la
+        // partie et sont remplaces, neuf autres joueurs vus en tout.
+        let mut m = Match::new("Bushido");
+        m.observe(&state(
+            -1,
+            0,
+            0,
+            json!([
+                me(0, 0),
+                named("a", 0, 10, 0),
+                named("b", 0, 20, 0),
+                named("c", 0, 30, 0),
+                named("d", 1, 40, 0),
+                named("e", 1, 50, 0),
+                named("f", 1, 60, 0),
+                named("g", 1, 70, 0),
+            ]),
+        ));
+        m.observe(&state(
+            -1,
+            0,
+            0,
+            json!([
+                me(0, 0),
+                named("h", 0, 5, 0),
+                named("i", 0, 6, 0),
+                named("c", 0, 30, 0),
+                named("d", 1, 40, 0),
+                named("e", 1, 50, 0),
+                named("f", 1, 60, 0),
+                named("g", 1, 70, 0),
+            ]),
+        ));
+        let s = m.finish(300).unwrap();
+        assert_eq!(s.others.len(), 7);
+        assert!(
+            s.others.iter().all(|o| !o.left),
+            "les partis cedent leur place aux presents"
+        );
     }
 }
