@@ -7,6 +7,49 @@ Release, so every version MUST have its own section here before it is tagged.
 The release build fails when one is missing, which is deliberate: publishing a
 version under the previous one's notes has already happened once.
 
+## 0.7.1
+
+### Your Battlegrounds rating, from Hearthstone Deck Tracker
+
+Hearthstone does not write your Battlegrounds rating in its logs. Hearthstone
+Deck Tracker, which many players already use, does keep it. If it is installed,
+the Hearthstone tab now offers to read your rating from it after each solo
+Battlegrounds game, and to send it along with the match. It is off until you
+turn it on.
+
+Only your rating before and after the game is read and sent. Everything else
+Hearthstone Deck Tracker records stays on your computer.
+
+Hearthstone Deck Tracker saves a game only when you leave the end screen, so the
+game is sent once you are back in the lobby, and the client waits up to ten
+minutes for it. The match itself is saved the moment it ends: closing KFIRE
+right after a game never loses it. When no rating could be found, the match is
+sent without it and the Hearthstone tab says so.
+
+### The full Rocket League scoreboard
+
+At the end of a match, the client now also sends the other players' numbers:
+score, goals, assists, saves, shots, and whether they left before the end. Their
+names never leave your computer. On the portal, a match unfolds into the
+scoreboard of both teams, with guild members named and everyone else shown as
+a teammate or an opponent. When several members played the same match, the
+recap shows it once.
+
+### Open the portal from the tray
+
+Each linked server's menu in the tray now starts with "Open the portal", which
+opens the server's website in your browser.
+
+### Launch at login survives updates
+
+Installing a new version used to remove KFIRE from the programs started with
+your computer, every time. KFIRE now remembers your choice and puts it back
+after an update.
+
+It is turned back on once for everyone with this version, because KFIRE cannot
+tell an update apart from a choice you made. If you had turned it off on
+purpose, turn it off again in Settings: from then on your choice is kept.
+
 ## 0.7.1-beta.2
 
 Test build of 0.7.1, not offered by the update indicator.
