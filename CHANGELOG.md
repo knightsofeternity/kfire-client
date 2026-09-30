@@ -7,6 +7,25 @@ Release, so every version MUST have its own section here before it is tagged.
 The release build fails when one is missing, which is deliberate: publishing a
 version under the previous one's notes has already happened once.
 
+## 0.8.0-beta.1
+
+### Your World of Warcraft playtime, through an addon (beta)
+
+Blizzard publishes your playtime nowhere: not for World of Warcraft, not for
+any of its games. The game itself knows each character's /played, though. This
+version adds a World of Warcraft tab that installs a small addon, KFire, in
+every edition of the game it finds: Retail, Classic and Forever, and the
+Project Ascension client too. The addon records each character's /played when
+you log in, without printing anything in your chat, and the game saves it when
+you log out. Type /kfire in game to check it works.
+
+The client keeps the addon up to date after every game update, never touches an
+addon it did not install, and removes it when you turn it off. It is off until
+you turn it on.
+
+This beta only installs the addon: nothing is sent to your server yet. Sending
+your playtime comes in the next version.
+
 ## 0.7.1
 
 ### Your Battlegrounds rating, from Hearthstone Deck Tracker
