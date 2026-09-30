@@ -4,3 +4,4 @@
 
 pub mod addon;
 pub mod buildinfo;
+pub mod paths;
