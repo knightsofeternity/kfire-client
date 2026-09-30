@@ -7,6 +7,7 @@ pub mod scanner;
 pub mod status;
 pub mod update;
 pub mod ws;
+pub mod wow;
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
