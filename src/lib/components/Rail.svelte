@@ -1,13 +1,14 @@
 <script lang="ts">
   import { app } from "$lib/state.svelte";
   import { t } from "$lib/i18n";
-  import { hsPip, lolPip, rlPip } from "$lib/pips";
+  import { hsPip, lolPip, rlPip, wowPip } from "$lib/pips";
   import type { Pip, Tab } from "$lib/types";
 
   const games: { tab: Tab; name: string; pip: () => Pip }[] = [
     { tab: "hearthstone", name: "Hearthstone", pip: () => hsPip(app.hs) },
     { tab: "rocket-league", name: "Rocket League", pip: () => rlPip(app.rl) },
     { tab: "league-of-legends", name: "League of Legends", pip: () => lolPip(app.lol) },
+    { tab: "world-of-warcraft", name: "World of Warcraft", pip: () => wowPip(app.wow) },
   ];
 </script>
 

@@ -1,0 +1,8 @@
+## Interface: 120100, 120105, 11509, 50503, 16001
+## Title: KFIRE
+## Notes: Records each character's /played for the KFIRE client.
+## Author: Knights of Eternity
+## Version: 1
+## SavedVariables: KFirePlayed
+
+KFire.lua

@@ -49,6 +49,22 @@ export type RlStatus = {
   last_match: MatchPayload | null;
 } & RlLive;
 export type LolStatus = { enabled: boolean; watching: boolean };
+export type WowEdition = {
+  product: string;
+  label: string;
+  dir: string;
+  interface: number | null;
+  state: "installed" | "pending" | "foreign" | "off";
+  saved_at: string | null;
+};
+export type WowStatus = {
+  supported: boolean;
+  enabled: boolean;
+  root: string | null;
+  ascension: string | null;
+  error: string | null;
+  editions: WowEdition[];
+};
 
-export type Tab = "home" | "hearthstone" | "rocket-league" | "league-of-legends" | "settings";
+export type Tab = "home" | "hearthstone" | "rocket-league" | "league-of-legends" | "world-of-warcraft" | "settings";
 export type Pip = "on" | "todo" | "off";

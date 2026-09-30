@@ -48,6 +48,17 @@ export function install() {
           };
         case "rl_live":
           return { last_mismatch: "", watching: false, socket_connected: false, decoded: 0 };
+        case "wow_status":
+        case "wow_set_enabled":
+          return {
+            supported: true, enabled: true, root: "C:\\Program Files (x86)\\World of Warcraft",
+            ascension: "C:\\Program Files\\Ascension Launcher\\resources\\ascension-live", error: null,
+            editions: [
+              { product: "wow", label: "Retail", dir: "C:\\Program Files (x86)\\World of Warcraft\\_retail_", interface: 120100, state: "installed", saved_at: iso(30) },
+              { product: "wow_classic_beta", label: "Forever", dir: "C:\\Program Files (x86)\\World of Warcraft\\_classic_beta_", interface: 16001, state: "installed", saved_at: null },
+              { product: "ascension", label: "Ascension", dir: "C:\\Program Files\\Ascension Launcher\\resources\\ascension-live", interface: 30300, state: "pending", saved_at: null },
+            ],
+          };
         case "lol_status":
           return { enabled: false, watching: false };
         case "get_autostart":

@@ -7,6 +7,7 @@ pub mod scanner;
 pub mod status;
 pub mod update;
 pub mod ws;
+pub mod wow;
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -624,6 +625,22 @@ fn rl_set_player_name(state: tauri::State<'_, AppState>, name: String) {
     state.db.set_setting("rl_player_name", name.trim());
 }
 
+/// L'état de l'addon WoW dans chaque édition trouvée.
+#[tauri::command]
+fn wow_status(state: tauri::State<'_, AppState>) -> crate::wow::Status {
+    crate::wow::status(&state.db)
+}
+
+/// Installe ou retire l'addon partout, puis renvoie le nouvel état.
+#[tauri::command]
+fn wow_set_enabled(state: tauri::State<'_, AppState>, enabled: bool) -> crate::wow::Status {
+    state
+        .db
+        .set_setting(crate::wow::SETTING, if enabled { "1" } else { "0" });
+    crate::wow::sync(&state.db);
+    crate::wow::status(&state.db)
+}
+
 /// Les champs Rocket League qui changent sans que le membre ait rien fait,
 /// donc les seuls qu'il faille sonder.
 ///
@@ -982,6 +999,8 @@ pub fn run() {
             rl_set_install_dir,
             rl_set_player_name,
             rl_live,
+            wow_status,
+            wow_set_enabled,
             lol_status,
             lol_set_enabled,
             update::check_for_update
@@ -991,6 +1010,13 @@ pub fn run() {
             let data_dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&data_dir)?;
             let db = Arc::new(Db::open(&data_dir.join("kfire.db"))?);
+
+            // L'addon WoW est remis d'aplomb à chaque démarrage, hors du fil
+            // principal : trouver le jeu peut sonder plusieurs lecteurs.
+            {
+                let db = db.clone();
+                std::thread::spawn(move || crate::wow::sync(&db));
+            }
 
             // --- scanner ------------------------------------------------------
             let scanner_state = Arc::new(ScannerState::default());
@@ -1098,6 +1124,13 @@ pub fn run() {
                         } else {
                             crate::lol::stop_watching();
                         }
+                    }
+                    // World of Warcraft : l'addon suit la version du jeu. Au
+                    // lancement, on rattrape une mise à jour faite juste avant ;
+                    // à l'arrêt, celle que le lanceur appliquera ensuite.
+                    if crate::wow::is_wow_slug(&ev.game_slug) {
+                        let db = queue_db.clone();
+                        std::thread::spawn(move || crate::wow::sync(&db));
                     }
                     let _ = running_handle.emit("kfire://detection", event_type);
                     rebuild_tray(&running_handle);

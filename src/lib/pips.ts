@@ -35,3 +35,13 @@ export function rlPip(
 export function lolPip(s: { enabled: boolean } | null): Pip {
   return s?.enabled ? "on" : "off";
 }
+
+export function wowPip(
+  s: { supported: boolean; enabled: boolean; error: string | null; editions: { state: string }[] } | null,
+): Pip {
+  if (!s || !s.supported) return "off";
+  // Same rule as Hearthstone and Rocket League: a game never found needs setup.
+  if (!s.enabled) return s.editions.length > 0 ? "off" : "todo";
+  if (s.error || s.editions.length === 0) return "todo";
+  return s.editions.every((e) => e.state === "installed") ? "on" : "todo";
+}
