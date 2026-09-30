@@ -60,8 +60,7 @@ pub fn lists_wow(build_info: &str) -> bool {
 pub fn flavor_product(text: &str) -> Option<String> {
     text.lines()
         .map(|l| l.trim())
-        .filter(|l| !l.is_empty() && !l.starts_with('#') && !l.contains('!'))
-        .last()
+        .rfind(|l| !l.is_empty() && !l.starts_with('#') && !l.contains('!'))
         .map(|l| l.split('|').next().unwrap_or(l).trim().to_string())
         .filter(|p| !p.is_empty())
 }
