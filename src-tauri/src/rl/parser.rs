@@ -102,6 +102,10 @@ pub struct Summary {
     /// `None` when the game never sent this playlist. That is the norm: Rocket
     /// League's actual protocol has no `Playlist` field.
     pub playlist: Option<i64>,
+    /// The map's code (`Stadium_P`, `HoopsStadium_P`...), `None` if the game
+    /// never sent one. The only hint of the mode: Hoops and Dropshot have
+    /// arenas of their own, whereas nothing tells ranked from casual.
+    pub arena: Option<String>,
     pub team_size: i64,
     pub player_team: i64,
     pub team_blue_score: i64,
@@ -156,6 +160,7 @@ pub struct Match {
     /// `None` for as long as the game has never sent a `Playlist` field. That
     /// is the normal state: the real protocol has no such field.
     playlist: Option<i64>,
+    arena: Option<String>,
     blue: i64,
     orange: i64,
     seconds: i64,
@@ -211,6 +216,7 @@ impl Match {
             member: member.to_string(),
             guid: None,
             playlist: None,
+            arena: None,
             blue: 0,
             orange: 0,
             seconds: 0,
@@ -249,6 +255,16 @@ impl Match {
             // playlist; that is exactly the bug that refused every real match.
             if let Some(p) = game.get("Playlist").and_then(Value::as_i64) {
                 self.playlist = Some(p);
+            }
+            // Copied only when it changes: this runs thirty times a second.
+            if let Some(a) = game
+                .get("Arena")
+                .and_then(Value::as_str)
+                .filter(|a| !a.is_empty() && a.len() <= 64)
+            {
+                if self.arena.as_deref() != Some(a) {
+                    self.arena = Some(a.to_string());
+                }
             }
             self.seconds = i(game, "TimeSeconds");
             self.overtime = game
@@ -435,6 +451,7 @@ impl Match {
 
         Ok(Summary {
             playlist: self.playlist,
+            arena: self.arena.clone(),
             team_size,
             player_team: mine.team,
             team_blue_score: self.blue,
@@ -538,6 +555,7 @@ mod tests {
             .finish(300)
             .expect("a real match with no Playlist must be summarised");
         assert_eq!(s.playlist, None);
+        assert_eq!(s.arena.as_deref(), Some("Stadium_P"));
         assert_eq!(s.result, "win");
         assert_eq!(s.team_size, 2);
     }
