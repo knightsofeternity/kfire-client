@@ -4,10 +4,10 @@ import { getVersion } from "@tauri-apps/api/app";
 import { t } from "./i18n";
 import type {
   HsStatus, IgnoredGame, LinkInfo, LolStatus, RlLive, RlStatus, RunningGame,
-  ServerStatus, StatusEvent, Tab, UiServer, UiState, UpdateInfo,
+  ServerStatus, StatusEvent, Tab, UiServer, UiState, UpdateInfo, WowStatus,
 } from "./types";
 
-const TABS: Tab[] = ["home", "hearthstone", "rocket-league", "league-of-legends", "settings"];
+const TABS: Tab[] = ["home", "hearthstone", "rocket-league", "league-of-legends", "world-of-warcraft", "settings"];
 const TAB_KEY = "kfire.tab";
 
 function savedTab(): Tab {
@@ -56,6 +56,9 @@ class AppState {
   lol = $state<LolStatus | null>(null);
   lolBusy = $state(false);
   lolError = $state("");
+  wow = $state<WowStatus | null>(null);
+  wowBusy = $state(false);
+  wowError = $state("");
 
   setTab(tab: Tab) {
     this.tab = tab;
@@ -216,6 +219,26 @@ class AppState {
     }
   }
 
+  async loadWow() {
+    try {
+      this.wow = await invoke<WowStatus>("wow_status");
+    } catch {
+      this.wow = null;
+    }
+  }
+
+  async toggleWow(next: boolean) {
+    this.wowBusy = true;
+    this.wowError = "";
+    try {
+      this.wow = await invoke<WowStatus>("wow_set_enabled", { enabled: next });
+    } catch (e) {
+      this.wowError = String(e);
+    } finally {
+      this.wowBusy = false;
+    }
+  }
+
   async loadLol() {
     try {
       this.lol = await invoke<LolStatus>("lol_status");
@@ -298,6 +321,7 @@ class AppState {
     this.loadHs();
     this.loadRl();
     this.loadLol();
+    this.loadWow();
     const interval = setInterval(() => {
       this.refresh().catch((e) => console.warn("refresh failed", e));
     }, 4000);
@@ -327,11 +351,13 @@ class AppState {
         this.refresh().catch((e) => console.warn("refresh failed", e));
         this.loadHs();
         this.loadRl();
+        this.loadWow();
       }),
       // The moment the member actually looks at the window.
       listen(TauriEvent.WINDOW_FOCUS, () => {
         this.loadHs();
         this.loadRl();
+        this.loadWow();
       }),
     ];
     return () => {

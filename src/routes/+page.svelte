@@ -9,6 +9,7 @@
   import Hearthstone from "$lib/tabs/Hearthstone.svelte";
   import RocketLeague from "$lib/tabs/RocketLeague.svelte";
   import LeagueOfLegends from "$lib/tabs/LeagueOfLegends.svelte";
+  import WorldOfWarcraft from "$lib/tabs/WorldOfWarcraft.svelte";
 
   onMount(() => {
     let cleanup = () => {};
@@ -35,6 +36,7 @@
       {:else if app.tab === "hearthstone"}<Hearthstone />
       {:else if app.tab === "rocket-league"}<RocketLeague />
       {:else if app.tab === "league-of-legends"}<LeagueOfLegends />
+      {:else if app.tab === "world-of-warcraft"}<WorldOfWarcraft />
       {:else}<Settings />{/if}
       <Footer />
     </main>

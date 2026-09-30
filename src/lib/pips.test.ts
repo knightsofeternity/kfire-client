@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { hsPip, lolPip, rlPip } from "./pips";
+import { hsPip, lolPip, rlPip, wowPip } from "./pips";
 
 const hs = {
   supported: true,
@@ -45,4 +45,27 @@ describe("lolPip", () => {
     expect(lolPip({ enabled: false })).toBe("off");
     expect(lolPip(null)).toBe("off");
   });
+});
+
+const wow = {
+  supported: true,
+  enabled: true,
+  error: null as string | null,
+  editions: [{ state: "installed" }] as { state: string }[],
+};
+
+describe("wowPip", () => {
+  it("is on when installed everywhere", () => expect(wowPip(wow)).toBe("on"));
+  it("needs setup when an edition is not installed yet", () =>
+    expect(wowPip({ ...wow, editions: [{ state: "installed" }, { state: "pending" }] })).toBe("todo"));
+  it("needs setup when another addon holds the name", () =>
+    expect(wowPip({ ...wow, editions: [{ state: "foreign" }] })).toBe("todo"));
+  it("needs setup when the last install failed", () => expect(wowPip({ ...wow, error: "Retail: denied" })).toBe("todo"));
+  it("needs setup when neither WoW nor Ascension was found", () => expect(wowPip({ ...wow, editions: [] })).toBe("todo"));
+  it("needs setup when turned off and nothing was found", () =>
+    expect(wowPip({ ...wow, enabled: false, editions: [] })).toBe("todo"));
+  it("is off when turned off", () =>
+    expect(wowPip({ ...wow, enabled: false, editions: [{ state: "off" }] })).toBe("off"));
+  it("is off where WoW cannot run", () => expect(wowPip({ ...wow, supported: false })).toBe("off"));
+  it("is off before the first status", () => expect(wowPip(null)).toBe("off"));
 });

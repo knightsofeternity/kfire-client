@@ -13,6 +13,7 @@
     enabled,
     busy,
     canToggle = true,
+    toggleLabel = "",
     onToggle,
     fields,
     privacy,
@@ -30,6 +31,7 @@
     enabled: boolean;
     busy: boolean;
     canToggle?: boolean;
+    toggleLabel?: string;
     onToggle: (next: boolean) => void;
     fields: string[];
     privacy: string;
@@ -56,10 +58,10 @@
   {#if canToggle}
     <div class="card row">
       <div class="grow">
-        <b>{t("game.track")}</b>
+        <b>{toggleLabel || t("game.track")}</b>
         <div class="muted small">{subtitle}</div>
       </div>
-      <Switch checked={enabled} disabled={busy} label={t("game.track")} onchange={onToggle} />
+      <Switch checked={enabled} disabled={busy} label={toggleLabel || t("game.track")} onchange={onToggle} />
     </div>
   {/if}
 
