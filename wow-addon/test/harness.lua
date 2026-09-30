@@ -17,9 +17,11 @@ end
 -- ---------------------------------------------------------------- the world
 local W -- current simulated world, rebuilt by reset()
 
-local function newChatFrame()
+local function newChatFrame(legacy)
   local cf = { events = { TIME_PLAYED_MSG = true } }
-  function cf:IsEventRegistered(e) return self.events[e] == true end
+  if not legacy then
+    function cf:IsEventRegistered(e) return self.events[e] == true end
+  end
   function cf:UnregisterEvent(e) self.events[e] = nil end
   function cf:RegisterEvent(e) self.events[e] = true end
   return cf
@@ -37,8 +39,8 @@ local function reset(opts)
   -- Globals the addon reads.
   KFirePlayed = opts.saved
   NUM_CHAT_WINDOWS = 2
-  ChatFrame1 = newChatFrame()
-  ChatFrame2 = newChatFrame()
+  ChatFrame1 = newChatFrame(opts.legacy)
+  ChatFrame2 = newChatFrame(opts.legacy)
   issecretvalue = opts.issecretvalue
   SLASH_KFIRE1 = nil
   SlashCmdList = {}
@@ -46,7 +48,9 @@ local function reset(opts)
   function CreateFrame()
     local f = { registered = {} }
     function f:RegisterEvent(e) self.registered[e] = true end
-    function f:SetScript(_, fn) self.onEvent = fn end
+    function f:SetScript(name, fn)
+      if name == "OnEvent" then self.onEvent = fn else self.onUpdate = fn end
+    end
     table.insert(W.frames, f)
     return f
   end
@@ -65,6 +69,16 @@ local function reset(opts)
   function GetBuildInfo() return "12.1.0", "70009", "Sep 1 2026", 120100 end
   function print(...) table.insert(W.printed, table.concat({ ... }, " ")) end
 
+  -- A 3.3.5 client (Project Ascension): none of the APIs added since 2010.
+  if opts.legacy then
+    C_Timer = nil
+    GetServerTime = nil
+    GetCurrentRegion = nil
+    GetNormalizedRealmName = nil
+    function time() return W.now end
+    function GetBuildInfo() return "3.3.5", "12340", "Jun 24 2010", 30300 end
+  end
+
   local chunk = assert(loadfile("KFire/KFire.lua"))
   chunk("KFire", {})
 end
@@ -78,11 +92,15 @@ local function fire(event, ...)
 end
 
 -- Runs the timers queued so far whose delay is <= maxDelay, in order.
+-- Legacy clients have no C_Timer: time passes through OnUpdate scripts.
 local function runTimers(maxDelay)
   local pending = W.timers
   W.timers = {}
   for _, t in ipairs(pending) do
     if t.delay <= maxDelay then t.fn() else table.insert(W.timers, t) end
+  end
+  for _, f in ipairs(W.frames) do
+    if f.onUpdate then f.onUpdate(f, maxDelay) end
   end
 end
 
@@ -128,12 +146,12 @@ do -- 5. login: request after the delay, never before
   check(W.requests == 1, "one request after the login delay")
 end
 
-do -- 6. zoning (not a login, not a reload) sends nothing
+do -- 6. zoning (a later PLAYER_ENTERING_WORLD) sends nothing more
   reset()
-  fire("ADDON_LOADED", "KFire")
+  login()
   fire("PLAYER_ENTERING_WORLD", false, false)
   runTimers(60)
-  check(W.requests == 0, "zoning does not request /played")
+  check(W.requests == 1, "zoning does not request /played again")
 end
 
 do -- 7. a /reload requests too
@@ -223,6 +241,39 @@ do -- 16. /kfire in the normal case
   local line = W.printed[#W.printed]
   check(line:find("interface 120100", 1, true) and line:find("/played 4474800", 1, true)
     and line:find("1 personnage", 1, true), "/kfire prints interface, played and count")
+end
+
+
+do -- 17. a 3.3.5 client (Ascension): no C_Timer, server time, region, normalized realm, event args
+  reset({ legacy = true, realm = "Laughing Skull", realmNorm = "unused" })
+  fire("ADDON_LOADED", "KFire")
+  fire("PLAYER_ENTERING_WORLD")
+  runTimers(0)
+  check(W.requests == 0, "legacy: no request before the delay")
+  runTimers(5)
+  check(W.requests == 1, "legacy: first PLAYER_ENTERING_WORLD requests /played")
+  check(ChatFrame1.events.TIME_PLAYED_MSG == nil, "legacy: chat muted without IsEventRegistered")
+  fire("TIME_PLAYED_MSG", 7200, 60)
+  runTimers(0)
+  check(ChatFrame1.events.TIME_PLAYED_MSG == true, "legacy: chat given back")
+  local c = KFirePlayed.chars["unknown/LaughingSkull/Thrall"]
+  check(c and c.played == 7200 and c.realm == "Laughing Skull" and c.region == "unknown",
+    "legacy: stored under unknown/<realm without spaces>/name")
+  W.now = W.now + 60
+  fire("PLAYER_LOGOUT")
+  check(KFirePlayed.chars["unknown/LaughingSkull/Thrall"].played == 7260, "legacy: logout adds elapsed time")
+  fire("PLAYER_ENTERING_WORLD")
+  runTimers(60)
+  check(W.requests == 1, "legacy: zoning does not request again")
+end
+
+do -- 18. legacy: no reply, the chat still comes back after the timeout
+  reset({ legacy = true })
+  fire("ADDON_LOADED", "KFire")
+  fire("PLAYER_ENTERING_WORLD")
+  runTimers(5)
+  runTimers(10)
+  check(ChatFrame1.events.TIME_PLAYED_MSG == true, "legacy: chat unmuted after the reply timeout")
 end
 
 if failures > 0 then

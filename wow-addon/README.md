@@ -5,7 +5,7 @@ personnage à la connexion, sans l'afficher dans le chat, et l'écrit dans
 `WTF/Account/<COMPTE>/SavedVariables/KFire.lua`. Le client KFIRE lit ce fichier après la
 fermeture du jeu et envoie le temps de jeu à ton serveur KFIRE.
 
-Il fonctionne dans Retail, Classic et Forever. `/kfire` affiche son état.
+Il fonctionne dans Retail, Classic, Forever et Ascension (client 3.3.5). `/kfire` affiche son état.
 
 Normalement, c'est le client KFIRE qui l'installe et le met à jour.
 
