@@ -16,6 +16,8 @@ local pending = false     -- a silent request of ours is in flight
 local muted = {}          -- chat frames we took TIME_PLAYED_MSG away from
 local last                -- { total = seconds, at = time } of the latest reply
 local secretSeen = false  -- the game handed us an unreadable (secret) value
+local requested = false   -- our silent request has left
+local lastError           -- why the last record failed, shown by /kfire
 
 -- C_Timer only exists since 6.0: older clients count time in OnUpdate.
 local timers, ticker = {}, nil
@@ -54,12 +56,23 @@ local function region()
 end
 
 -- The realm without spaces or dashes, like GetNormalizedRealmName (5.x+).
+-- Ascension backports that function, and it can answer nil there.
 local function normalizedRealm()
-  if GetNormalizedRealmName then
-    return GetNormalizedRealmName() or ""
+  local norm = GetNormalizedRealmName and GetNormalizedRealmName()
+  if norm and norm ~= "" then
+    return norm
   end
   local realm = (GetRealmName() or ""):gsub("[%s%-]", "")
   return realm
+end
+
+-- SavedVariables are normally ready at ADDON_LOADED; never depend on having
+-- seen it, a missing table must not lose a reply.
+local function ensureSaved()
+  if type(KFirePlayed) ~= "table" or KFirePlayed.v ~= 1 then
+    KFirePlayed = { v = 1, chars = {} }
+  end
+  KFirePlayed.chars = KFirePlayed.chars or {}
 end
 
 local function mute()
@@ -83,6 +96,7 @@ end
 
 local function requestSilently()
   pending = true
+  requested = true
   mute()
   RequestTimePlayed()
   after(REPLY_TIMEOUT, function()
@@ -97,8 +111,11 @@ local function record(total)
   local realmNorm = normalizedRealm()
   local name = UnitName("player") or ""
   if realmNorm == "" or name == "" then
-    return -- too early in the login to know who we are; the logout pass retries
+    -- Too early in the login to know who we are; the logout pass retries.
+    lastError = "royaume ou nom inconnu"
+    return
   end
+  ensureSaved()
   local reg = region()
   local _, classToken = UnitClass("player")
   KFirePlayed.chars[reg .. "/" .. realmNorm .. "/" .. name] = {
@@ -111,6 +128,16 @@ local function record(total)
     class = classToken,
     at = now(),
   }
+  lastError = nil
+end
+
+-- A failure is kept for /kfire instead of vanishing: most clients hide Lua
+-- errors, and a silent failure is what made the first Ascension test unreadable.
+local function safeRecord(total)
+  local ok, err = pcall(record, total)
+  if not ok then
+    lastError = tostring(err)
+  end
 end
 
 frame:RegisterEvent("ADDON_LOADED")
@@ -121,10 +148,7 @@ frame:RegisterEvent("PLAYER_LOGOUT")
 frame:SetScript("OnEvent", function(_, event, ...)
   if event == "ADDON_LOADED" then
     if ... ~= ADDON then return end
-    if type(KFirePlayed) ~= "table" or KFirePlayed.v ~= 1 then
-      KFirePlayed = { v = 1, chars = {} }
-    end
-    KFirePlayed.chars = KFirePlayed.chars or {}
+    ensureSaved()
   elseif event == "PLAYER_ENTERING_WORLD" then
     -- The first one after loading is a login or a /reload (both restart the
     -- UI); later ones are zoning. Old clients do not say which, so we count.
@@ -144,10 +168,10 @@ frame:SetScript("OnEvent", function(_, event, ...)
       return
     end
     last = { total = total, at = now() }
-    record(total)
+    safeRecord(total)
   elseif event == "PLAYER_LOGOUT" then
     if last then
-      record(last.total + (now() - last.at))
+      safeRecord(last.total + (now() - last.at))
     end
   end
 end)
@@ -160,4 +184,8 @@ SlashCmdList.KFIRE = function()
     :format(tostring(select(4, GetBuildInfo())),
       last and tostring(last.total) or "inconnu",
       secretSeen and "OUI" or "non", n))
+  print(("KFIRE : %s - %s, sauvegarde %s, demande envoyée %s, erreur : %s")
+    :format(tostring(UnitName("player")), normalizedRealm(),
+      type(KFirePlayed) == "table" and "prête" or "absente",
+      requested and "oui" or "non", lastError or "aucune"))
 end

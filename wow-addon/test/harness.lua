@@ -75,8 +75,15 @@ local function reset(opts)
     GetServerTime = nil
     GetCurrentRegion = nil
     GetNormalizedRealmName = nil
+    if opts.backportedNormalizedRealm then
+      -- Ascension backports some modern APIs; this one may answer nil.
+      function GetNormalizedRealmName() return nil end
+    end
     function time() return W.now end
     function GetBuildInfo() return "3.3.5", "12340", "Jun 24 2010", 30300 end
+  end
+  if opts.unitClassFails then
+    function UnitClass() error("UnitClass exploded") end
   end
 
   local chunk = assert(loadfile("KFire/KFire.lua"))
@@ -102,6 +109,10 @@ local function runTimers(maxDelay)
   for _, f in ipairs(W.frames) do
     if f.onUpdate then f.onUpdate(f, maxDelay) end
   end
+end
+
+local function printed()
+  return table.concat(W.printed, "\n")
 end
 
 local function login()
@@ -208,7 +219,7 @@ do -- 12. a secret value is never stored
   fire("TIME_PLAYED_MSG", 4474800, 3600)
   check(next(KFirePlayed.chars) == nil, "secret /played is not stored")
   SlashCmdList.KFIRE()
-  check(W.printed[#W.printed]:find("valeur secrète OUI", 1, true) ~= nil, "/kfire reports the secret value")
+  check(printed():find("valeur secrète OUI", 1, true) ~= nil, "/kfire reports the secret value")
 end
 
 do -- 13. no reply: chat is given back after the timeout
@@ -226,8 +237,8 @@ do -- 14. a /played typed by the player is recorded but not muted
   check(KFirePlayed.chars["eu/ConfrérieduThorium/Thrall"].played == 5000, "a manual /played is recorded too")
 end
 
-do -- 15. unknown realm at reply time: nothing stored, no crash
-  reset({ realmNorm = "" })
+do -- 15. no realm at all at reply time: nothing stored, no crash
+  reset({ realmNorm = "", realm = "" })
   login()
   fire("TIME_PLAYED_MSG", 5000, 50)
   check(next(KFirePlayed.chars) == nil, "no realm yet, nothing stored")
@@ -238,7 +249,7 @@ do -- 16. /kfire in the normal case
   login()
   fire("TIME_PLAYED_MSG", 4474800, 3600)
   SlashCmdList.KFIRE()
-  local line = W.printed[#W.printed]
+  local line = printed()
   check(line:find("interface 120100", 1, true) and line:find("/played 4474800", 1, true)
     and line:find("1 personnage", 1, true), "/kfire prints interface, played and count")
 end
@@ -274,6 +285,48 @@ do -- 18. legacy: no reply, the chat still comes back after the timeout
   runTimers(5)
   runTimers(10)
   check(ChatFrame1.events.TIME_PLAYED_MSG == true, "legacy: chat unmuted after the reply timeout")
+end
+
+
+do -- 19. Ascension: GetNormalizedRealmName exists but answers nil
+  reset({ legacy = true, backportedNormalizedRealm = true, realm = "Laughing Skull" })
+  fire("ADDON_LOADED", "KFire")
+  fire("TIME_PLAYED_MSG", 10152, 1000)
+  local c = KFirePlayed.chars["unknown/LaughingSkull/Thrall"]
+  check(c ~= nil and c.played == 10152, "an empty normalized realm falls back to the realm name")
+end
+
+do -- 20. the saved table is created even if ADDON_LOADED never reached us
+  reset()
+  fire("TIME_PLAYED_MSG", 5000, 50)
+  check(type(KFirePlayed) == "table" and KFirePlayed.chars["eu/ConfrérieduThorium/Thrall"] ~= nil,
+    "a reply before ADDON_LOADED still records")
+end
+
+do -- 21. /kfire says who, where, and whether the silent request left
+  reset({ realm = "Laughing Skull", realmNorm = "LaughingSkull" })
+  login()
+  SlashCmdList.KFIRE()
+  local out = printed()
+  check(out:find("Thrall", 1, true) and out:find("LaughingSkull", 1, true), "/kfire shows the character and realm")
+  check(out:find("demande envoyée oui", 1, true) ~= nil, "/kfire shows the silent request left")
+  check(out:find("erreur : aucune", 1, true) ~= nil, "/kfire shows no error")
+end
+
+do -- 22. an error while recording is kept and shown, not swallowed
+  reset({ unitClassFails = true })
+  login()
+  fire("TIME_PLAYED_MSG", 5000, 50)
+  SlashCmdList.KFIRE()
+  check(printed():find("UnitClass exploded", 1, true) ~= nil, "/kfire shows the last error")
+end
+
+do -- 23. a skipped record says why
+  reset({ realmNorm = "", realm = "" })
+  login()
+  fire("TIME_PLAYED_MSG", 5000, 50)
+  SlashCmdList.KFIRE()
+  check(printed():find("royaume ou nom inconnu", 1, true) ~= nil, "/kfire says the realm or name was unknown")
 end
 
 if failures > 0 then

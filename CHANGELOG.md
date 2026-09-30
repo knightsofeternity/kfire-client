@@ -7,6 +7,22 @@ Release, so every version MUST have its own section here before it is tagged.
 The release build fails when one is missing, which is deliberate: publishing a
 version under the previous one's notes has already happened once.
 
+## 0.8.0-beta.2
+
+### World of Warcraft: a fix for Ascension, and a /kfire that explains itself
+
+On Project Ascension the addon read your /played but saved no character. This
+version fixes the most likely cause, and /kfire now says more: the character
+and realm it sees, whether it asked the game for your playtime, and the last
+error it met instead of keeping it to itself.
+
+### Rocket League: Hoops and Dropshot
+
+The game does not say which playlist you are in, but it does say which arena,
+and Hoops and Dropshot have arenas of their own. Your matches now read "2v2 ·
+Hoops" when your server is up to date. Ranked and casual still look the same:
+nothing the game sends tells them apart.
+
 ## 0.8.0-beta.1
 
 ### Your World of Warcraft playtime, through an addon (beta)

@@ -31,6 +31,10 @@ pub fn payload(s: &parser::Summary, slug: &str, played_at: chrono::DateTime<chro
     if let Some(p) = s.playlist {
         o.insert("playlist".into(), p.into());
     }
+    // Omitted when unknown, like the playlist. A map code, never a name.
+    if let Some(a) = &s.arena {
+        o.insert("arena".into(), a.clone().into());
+    }
     o.insert("team_size".into(), s.team_size.into());
     o.insert("player_team".into(), s.player_team.into());
     o.insert("team_blue_score".into(), s.team_blue_score.into());
@@ -392,6 +396,7 @@ mod tests {
     fn a_summary() -> Summary {
         Summary {
             playlist: Some(13),
+            arena: None,
             team_size: 3,
             player_team: 0,
             team_blue_score: 4,
@@ -462,6 +467,15 @@ mod tests {
         for forbidden in ["Bushido", "Coequipier", "Adversaire1", "Adversaire2", "g-real", "Name"] {
             assert!(!raw.contains(forbidden), "{forbidden} leaked into {raw}");
         }
+    }
+
+    #[test]
+    fn the_arena_travels_when_the_game_sent_one() {
+        let mut s = a_summary();
+        s.arena = Some("HoopsStadium_P".into());
+        let v = payload(&s, SLUG, at());
+        assert_eq!(v["arena"], "HoopsStadium_P");
+        assert!(payload(&a_summary(), SLUG, at()).get("arena").is_none());
     }
 
     fn at() -> chrono::DateTime<chrono::Utc> {
