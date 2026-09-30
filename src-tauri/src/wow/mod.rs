@@ -3,3 +3,4 @@
 //! /played, and keeps it up to date in every playable edition of the game.
 
 pub mod addon;
+pub mod buildinfo;
