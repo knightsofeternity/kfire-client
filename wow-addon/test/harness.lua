@@ -345,6 +345,16 @@ do -- 24. Ascension: GetNormalizedRealmName raises; the realm is derived instead
   check(printed():find("Vol'jinConquestofAzeroth", 1, true) ~= nil, "/kfire prints its second line without an error")
 end
 
+do -- checksum: the client recomputes it, so both must agree on a known value
+  reset({ realm = "Cho'gall", realmNorm = "Cho'gall", name = "Aldéide" })
+  W.now = 1790889833
+  login()
+  fire("TIME_PLAYED_MSG", 1041454, 100)
+  local c = KFirePlayed.chars["eu/Cho'gall/Aldéide"]
+  check(c ~= nil and c.at == 1790889833 and c.chk == 5118125,
+    "each record carries the checksum the client expects (5118125), got " .. tostring(c and c.chk))
+end
+
 if failures > 0 then
   out(failures .. " test(s) failed")
   os.exit(1)

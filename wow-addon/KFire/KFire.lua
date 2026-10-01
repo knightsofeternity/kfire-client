@@ -111,6 +111,19 @@ local function requestSilently()
   end)
 end
 
+-- A checksum of what makes a record, so the client can tell a record the
+-- addon wrote from one damaged on disk afterwards (seen once: two digits
+-- appended to a /played, then moved to another character). Kept in 24 bits,
+-- exact in Lua 5.1's doubles; the client computes it the same way.
+local function checksum(name, realmNorm, played, at)
+  local s = name .. "|" .. realmNorm .. "|" .. ("%d"):format(played) .. "|" .. ("%d"):format(at)
+  local h = 0
+  for i = 1, #s do
+    h = (h * 31 + s:byte(i)) % 16777213
+  end
+  return h
+end
+
 local function record(total)
   local realmNorm = normalizedRealm()
   local name = UnitName("player") or ""
@@ -122,6 +135,7 @@ local function record(total)
   ensureSaved()
   local reg = region()
   local _, classToken = UnitClass("player")
+  local at = now()
   KFirePlayed.chars[reg .. "/" .. realmNorm .. "/" .. name] = {
     region = reg,
     realm = GetRealmName() or realmNorm,
@@ -130,7 +144,8 @@ local function record(total)
     played = total,
     level = UnitLevel("player"),
     class = classToken,
-    at = now(),
+    at = at,
+    chk = checksum(name, realmNorm, total, at),
   }
   lastError = nil
 end

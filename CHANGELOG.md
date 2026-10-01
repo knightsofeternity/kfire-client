@@ -7,6 +7,20 @@ Release, so every version MUST have its own section here before it is tagged.
 The release build fails when one is missing, which is deliberate: publishing a
 version under the previous one's notes has already happened once.
 
+## 0.8.1
+
+### World of Warcraft: a damaged record no longer inflates your hours
+
+One member's playtime file was altered on disk after the addon wrote it: two
+digits appended to a character's /played, then moved to another character,
+which turned twelve days into more than three years. The addon now signs each
+record with a small checksum, and the client leaves out any record that no
+longer matches it instead of sending it. Your server also refuses a /played
+that grows faster than time passes, and corrects a total that was inflated.
+
+The addon updates itself the next time the client starts; records written by
+the previous version are still read as before.
+
 ## 0.8.0
 
 ### Your World of Warcraft playtime, at last
