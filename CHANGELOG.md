@@ -7,6 +7,36 @@ Release, so every version MUST have its own section here before it is tagged.
 The release build fails when one is missing, which is deliberate: publishing a
 version under the previous one's notes has already happened once.
 
+## 0.8.0
+
+### Your World of Warcraft playtime, at last
+
+Blizzard publishes your playtime nowhere, for none of its games. The game
+itself knows each character's /played, though. The new World of Warcraft tab
+installs a small addon, KFire, in every edition of the game it finds: Retail,
+Classic, Forever, and the Project Ascension client too. The addon records each
+character's /played when you log in, without printing anything in your chat,
+and the game saves it when you log out cleanly. Type /kfire in game to check it
+works.
+
+What the addon records is sent to your server when the game closes, and at the
+client's start for anything recorded meanwhile: each character's time played,
+level, class and realm, nothing else. Your server adds it up per edition, shows
+each character's /played on your World of Warcraft page, and keeps counting
+your sessions on top. The same list is never sent twice. Your server must be up
+to date for the hours to appear; an older one simply ignores them.
+
+The client keeps the addon up to date after every game update, never touches an
+addon it did not install, and removes it when you turn it off. It is off until
+you turn it on.
+
+### Rocket League: Hoops and Dropshot
+
+The game does not say which playlist you are in, but it does say which arena,
+and Hoops and Dropshot have arenas of their own. Your matches now read "2v2 ·
+Hoops" when your server is up to date. Ranked and casual still look the same:
+nothing the game sends tells them apart.
+
 ## 0.8.0-beta.3
 
 ### World of Warcraft: your playtime reaches KFIRE
