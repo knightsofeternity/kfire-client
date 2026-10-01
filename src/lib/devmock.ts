@@ -54,9 +54,9 @@ export function install() {
             supported: true, enabled: true, root: "C:\\Program Files (x86)\\World of Warcraft",
             ascension: "C:\\Program Files\\Ascension Launcher\\resources\\ascension-live", error: null,
             editions: [
-              { product: "wow", label: "Retail", dir: "C:\\Program Files (x86)\\World of Warcraft\\_retail_", interface: 120100, state: "installed", saved_at: iso(30) },
-              { product: "wow_classic_beta", label: "Forever", dir: "C:\\Program Files (x86)\\World of Warcraft\\_classic_beta_", interface: 16001, state: "installed", saved_at: null },
-              { product: "ascension", label: "Ascension", dir: "C:\\Program Files\\Ascension Launcher\\resources\\ascension-live", interface: 30300, state: "pending", saved_at: null },
+              { product: "wow", label: "Retail", dir: "C:\\Program Files (x86)\\World of Warcraft\\_retail_", interface: 120100, state: "installed", saved_at: iso(30), characters: 3 },
+              { product: "wow_classic_beta", label: "Forever", dir: "C:\\Program Files (x86)\\World of Warcraft\\_classic_beta_", interface: 16001, state: "installed", saved_at: null, characters: 0 },
+              { product: "ascension", label: "Ascension", dir: "C:\\Program Files\\Ascension Launcher\\resources\\ascension-live", interface: 30300, state: "pending", saved_at: null, characters: 0 },
             ],
           };
         case "lol_status":

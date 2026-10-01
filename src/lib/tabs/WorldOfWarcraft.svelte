@@ -49,6 +49,9 @@
             <p class="warning">{t("wow.foreign")}</p>
           {:else if app.wow.enabled}
             <div class="muted small">{savedLine(e)}</div>
+            {#if e.characters > 0}
+              <div class="muted small">{t("wow.characters", { n: e.characters })}</div>
+            {/if}
           {/if}
         </div>
       {/each}

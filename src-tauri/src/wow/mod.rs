@@ -10,6 +10,7 @@ pub mod addon;
 pub mod buildinfo;
 pub mod install;
 pub mod paths;
+pub mod savedvars;
 
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -133,6 +134,8 @@ pub struct EditionStatus {
     pub state: String,
     /// When the game last saved the addon's data (RFC 3339), if ever.
     pub saved_at: Option<String>,
+    /// How many characters the addon has recorded in this edition.
+    pub characters: usize,
 }
 
 /// Installs (enabled) or removes (disabled) the addon in every target.
@@ -179,6 +182,7 @@ pub fn status_targets(
                 dir: ed.dir.to_string_lossy().to_string(),
                 interface: *interface,
                 state: state.to_string(),
+                characters: read_characters(&ed.dir).len(),
                 saved_at: install::saved_at(&ed.dir)
                     .map(|t| chrono::DateTime::<chrono::Utc>::from(t).to_rfc3339()),
             }
@@ -321,6 +325,87 @@ mod tests {
     }
 
     #[test]
+    fn every_edition_reports_to_its_catalogue_game() {
+        assert_eq!(slug_for("wow"), Some("world-of-warcraft"));
+        assert_eq!(
+            slug_for("wow_classic_era"),
+            Some("world-of-warcraft-classic")
+        );
+        assert_eq!(
+            slug_for("wow_anniversary"),
+            Some("world-of-warcraft-classic")
+        );
+        assert_eq!(
+            slug_for("wow_classic_beta"),
+            Some("world-of-warcraft-forever")
+        );
+        assert_eq!(slug_for("ascension"), Some("wow-ascension"));
+        assert_eq!(slug_for("wowt"), None);
+    }
+
+    fn write_sv(edition: &Path, account: &str, body: &str) {
+        let dir = edition
+            .join("WTF")
+            .join("Account")
+            .join(account)
+            .join("SavedVariables");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("KFire.lua"), body).unwrap();
+    }
+
+    #[test]
+    fn accounts_merge_and_the_newest_record_wins() {
+        let ed = std::env::temp_dir().join(format!("kfire-wow-read-{}", uuid::Uuid::new_v4()));
+        let ch = |name: &str, played: i64, at: i64| {
+            format!("[\"eu/R/{name}\"] = {{ [\"name\"] = \"{name}\", [\"realm\"] = \"R\", [\"realmNorm\"] = \"R\", [\"region\"] = \"eu\", [\"played\"] = {played}, [\"at\"] = {at}, }},")
+        };
+        write_sv(
+            &ed,
+            "111#1",
+            &format!(
+                "KFirePlayed = {{ [\"v\"] = 1, [\"chars\"] = {{ {} {} }}, }}",
+                ch("Ouranos", 100, 10),
+                ch("Alt", 50, 10)
+            ),
+        );
+        write_sv(
+            &ed,
+            "222#1",
+            &format!(
+                "KFirePlayed = {{ [\"v\"] = 1, [\"chars\"] = {{ {} }}, }}",
+                ch("Ouranos", 900, 20)
+            ),
+        );
+        write_sv(&ed, "333#1", "garbage {{{");
+        let mut got = read_characters(&ed);
+        got.sort_by(|a, b| a.name.cmp(&b.name));
+        assert_eq!(got.len(), 2, "two characters, the broken file skipped");
+        assert_eq!(
+            (got[1].name.as_str(), got[1].played_seconds),
+            ("Ouranos", 900),
+            "newest record wins"
+        );
+        let p = payload("world-of-warcraft", &got);
+        assert_eq!(p["game_slug"], "world-of-warcraft");
+        let c = &p["characters"][1];
+        let mut keys: Vec<&str> = c.as_object().unwrap().keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec![
+                "name",
+                "played_seconds",
+                "realm",
+                "realm_norm",
+                "recorded_at",
+                "region"
+            ]
+        );
+        assert_eq!(c["recorded_at"], "1970-01-01T00:00:20+00:00");
+        std::fs::remove_dir_all(ed).unwrap();
+    }
+
+    #[test]
     fn config_wtf_is_the_fallback_interface() {
         let root = fake_root("cfg", &[("_classic_", Some("wow_classic"))]);
         let wtf = root.join("_classic_").join("WTF");
@@ -330,4 +415,137 @@ mod tests {
         assert_eq!(interface_for(&root, &ed), Some(50503));
         std::fs::remove_dir_all(root).unwrap();
     }
+}
+
+// --- Reading and sending what the addon recorded ---------------------------
+
+/// The catalogue game of an edition, as the servers know it.
+pub fn slug_for(product: &str) -> Option<&'static str> {
+    Some(match product {
+        "wow" => "world-of-warcraft",
+        "wow_classic" | "wow_classic_era" | "wow_anniversary" => "world-of-warcraft-classic",
+        "wow_classic_beta" => "world-of-warcraft-forever",
+        paths::ASCENSION => "wow-ascension",
+        _ => return None,
+    })
+}
+
+/// Every character the addon recorded in one edition, across all the game
+/// accounts of this licence. A character found twice keeps its newest record.
+pub fn read_characters(edition: &Path) -> Vec<savedvars::Character> {
+    let mut by_key: std::collections::BTreeMap<String, savedvars::Character> = Default::default();
+    let Ok(accounts) = std::fs::read_dir(edition.join("WTF").join("Account")) else {
+        return Vec::new();
+    };
+    for acc in accounts.flatten() {
+        let file = acc.path().join("SavedVariables").join("KFire.lua");
+        let Ok(src) = std::fs::read_to_string(&file) else {
+            continue;
+        };
+        let Some(chars) = savedvars::characters(&src) else {
+            log::warn!("wow: unreadable {}", file.display());
+            continue;
+        };
+        for c in chars {
+            let key = format!("{}/{}/{}", c.region, c.realm_norm, c.name);
+            if by_key.get(&key).is_none_or(|old| c.at > old.at) {
+                by_key.insert(key, c);
+            }
+        }
+    }
+    by_key.into_values().collect()
+}
+
+/// The match_result payload of one edition. Facts about the member's own
+/// characters, nothing else.
+pub fn payload(slug: &str, chars: &[savedvars::Character]) -> serde_json::Value {
+    let list: Vec<serde_json::Value> = chars
+        .iter()
+        .map(|c| {
+            let at = chrono::DateTime::from_timestamp(c.at, 0).unwrap_or_default();
+            let mut m = serde_json::json!({
+                "region": c.region, "realm": c.realm, "realm_norm": c.realm_norm, "name": c.name,
+                "played_seconds": c.played_seconds, "recorded_at": at.to_rfc3339(),
+            });
+            if let Some(l) = c.level {
+                m["level"] = l.into();
+            }
+            if let Some(cl) = &c.class {
+                m["class"] = cl.clone().into();
+            }
+            m
+        })
+        .collect();
+    serde_json::json!({ "game_slug": slug, "characters": list })
+}
+
+/// A short fingerprint of what was sent, to send it only once.
+fn fingerprint(v: &serde_json::Value) -> String {
+    use sha2::{Digest, Sha256};
+    let d = Sha256::digest(v.to_string().as_bytes());
+    d.iter().take(16).map(|b| format!("{b:02x}")).collect()
+}
+
+/// The servers a payload goes to: those whose catalogue knows the edition,
+/// and not set offline (same rule as Hearthstone and Rocket League).
+fn servers_for(db: &crate::db::Db, slug: &str) -> Vec<String> {
+    let global = db.get_setting("global_status").unwrap_or_default();
+    let catalog: Vec<(String, String)> = db
+        .load_games()
+        .into_iter()
+        .map(|(id, g)| (id, g.slug))
+        .collect();
+    db.list_servers()
+        .into_iter()
+        .filter(|s| {
+            crate::status::effective_status(&global, &s.status_override) != "offline"
+                && catalog.iter().any(|(sid, g)| sid == &s.id && g == slug)
+        })
+        .map(|s| s.id)
+        .collect()
+}
+
+/// Reads what the addon recorded in every edition and queues it for the
+/// servers that have not received this exact list yet. Returns whether
+/// anything was queued, for the caller to wake the sender.
+pub fn report(db: &crate::db::Db) -> bool {
+    let _guard = SYNC.lock().unwrap_or_else(|e| e.into_inner());
+    if !supported() || !enabled(db) {
+        return false;
+    }
+    let (root, asc) = (root(db), ascension_dir(db));
+    let mut by_slug: std::collections::BTreeMap<&str, Vec<savedvars::Character>> =
+        Default::default();
+    for (ed, _) in targets(root.as_deref(), asc.as_deref()) {
+        let Some(slug) = slug_for(&ed.product) else {
+            continue;
+        };
+        by_slug
+            .entry(slug)
+            .or_default()
+            .extend(read_characters(&ed.dir));
+    }
+    let mut queued = false;
+    let now = chrono::Utc::now().to_rfc3339();
+    for (slug, chars) in by_slug {
+        if chars.is_empty() {
+            continue;
+        }
+        let p = payload(slug, &chars);
+        let fp = fingerprint(&p);
+        for server in servers_for(db, slug) {
+            let key = format!("wow_played_sent:{server}:{slug}");
+            if db.get_setting(&key).as_deref() == Some(fp.as_str()) {
+                continue;
+            }
+            db.queue_event(&server, "match_result", slug, &now, Some(&p.to_string()));
+            db.set_setting(&key, &fp);
+            queued = true;
+            log::info!(
+                "wow: queued {} characters of {slug} for {server}",
+                chars.len()
+            );
+        }
+    }
+    queued
 }

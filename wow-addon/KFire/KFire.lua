@@ -56,11 +56,15 @@ local function region()
 end
 
 -- The realm without spaces or dashes, like GetNormalizedRealmName (5.x+).
--- Ascension backports that function, and it can answer nil there.
+-- Ascension backports that function, and its copy is broken: it answers nil,
+-- or raises ("attempt to call global 'Sub'"). Called protected, and derived
+-- from the realm name whenever it does not give a usable answer.
 local function normalizedRealm()
-  local norm = GetNormalizedRealmName and GetNormalizedRealmName()
-  if norm and norm ~= "" then
-    return norm
+  if GetNormalizedRealmName then
+    local ok, norm = pcall(GetNormalizedRealmName)
+    if ok and type(norm) == "string" and norm ~= "" then
+      return norm
+    end
   end
   local realm = (GetRealmName() or ""):gsub("[%s%-]", "")
   return realm

@@ -1064,6 +1064,18 @@ pub fn run() {
                 live: watch::channel(None).0,
             };
 
+            // What the WoW addon recorded since the last run (a crash, a
+            // client closed before the game): sent once at start.
+            {
+                let db = db.clone();
+                let notify = state.queue_notify.clone();
+                std::thread::spawn(move || {
+                    if crate::wow::report(&db) {
+                        notify.notify_one();
+                    }
+                });
+            }
+
             // --- scanner events → SQLite queue → WS tasks ----------------------
             let queue_db = db.clone();
             let queue_notify = state.queue_notify.clone();
@@ -1130,7 +1142,16 @@ pub fn run() {
                     // à l'arrêt, celle que le lanceur appliquera ensuite.
                     if crate::wow::is_wow_slug(&ev.game_slug) {
                         let db = queue_db.clone();
-                        std::thread::spawn(move || crate::wow::sync(&db));
+                        let notify = queue_notify.clone();
+                        let stopped = !ev.started;
+                        std::thread::spawn(move || {
+                            crate::wow::sync(&db);
+                            // The game writes the addon's file when it closes:
+                            // that is when there is something new to send.
+                            if stopped && crate::wow::report(&db) {
+                                notify.notify_one();
+                            }
+                        });
                     }
                     let _ = running_handle.emit("kfire://detection", event_type);
                     rebuild_tray(&running_handle);
