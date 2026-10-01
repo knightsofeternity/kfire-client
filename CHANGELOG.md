@@ -7,6 +7,26 @@ Release, so every version MUST have its own section here before it is tagged.
 The release build fails when one is missing, which is deliberate: publishing a
 version under the previous one's notes has already happened once.
 
+## 0.8.0-beta.3
+
+### World of Warcraft: your playtime reaches KFIRE
+
+What the KFire addon records is now sent to your server when the game closes,
+and at the client's start for anything recorded meanwhile: each character's
+time played, level, class and realm, nothing else. Your server adds it up per
+edition (Retail, Classic, Forever, Ascension), shows each character's /played
+on your World of Warcraft page, and keeps counting your sessions on top. The
+World of Warcraft tab shows how many characters the addon recorded.
+
+The same list is never sent twice. Your server must be up to date for the hours
+to appear; an older one simply ignores them.
+
+### Ascension: the addon records your characters
+
+On Project Ascension the addon read your /played but stopped with a Lua error
+and saved nothing: Ascension's copy of a modern realm function is broken. The
+addon now works around it and records your characters there too.
+
 ## 0.8.0-beta.2
 
 ### World of Warcraft: a fix for Ascension, and a /kfire that explains itself

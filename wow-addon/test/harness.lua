@@ -79,6 +79,10 @@ local function reset(opts)
       -- Ascension backports some modern APIs; this one may answer nil.
       function GetNormalizedRealmName() return nil end
     end
+    if opts.brokenNormalizedRealm then
+      -- Seen on Ascension 2026-10-01: the backport calls a global it lacks.
+      function GetNormalizedRealmName() error("attempt to call global 'Sub' (a nil value)") end
+    end
     function time() return W.now end
     function GetBuildInfo() return "3.3.5", "12340", "Jun 24 2010", 30300 end
   end
@@ -327,6 +331,18 @@ do -- 23. a skipped record says why
   fire("TIME_PLAYED_MSG", 5000, 50)
   SlashCmdList.KFIRE()
   check(printed():find("royaume ou nom inconnu", 1, true) ~= nil, "/kfire says the realm or name was unknown")
+end
+
+
+do -- 24. Ascension: GetNormalizedRealmName raises; the realm is derived instead
+  reset({ legacy = true, brokenNormalizedRealm = true, realm = "Vol'jin - Conquest of Azeroth" })
+  fire("ADDON_LOADED", "KFire")
+  fire("TIME_PLAYED_MSG", 11186, 100)
+  local c = KFirePlayed.chars["unknown/Vol'jinConquestofAzeroth/Thrall"]
+  check(c ~= nil and c.played == 11186 and c.realm == "Vol'jin - Conquest of Azeroth",
+    "a broken GetNormalizedRealmName falls back to the realm name")
+  SlashCmdList.KFIRE()
+  check(printed():find("Vol'jinConquestofAzeroth", 1, true) ~= nil, "/kfire prints its second line without an error")
 end
 
 if failures > 0 then

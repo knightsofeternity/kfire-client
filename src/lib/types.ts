@@ -56,6 +56,8 @@ export type WowEdition = {
   interface: number | null;
   state: "installed" | "pending" | "foreign" | "off";
   saved_at: string | null;
+  /** Characters the addon has recorded in this edition. */
+  characters: number;
 };
 export type WowStatus = {
   supported: boolean;
