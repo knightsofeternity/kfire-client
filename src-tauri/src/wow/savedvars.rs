@@ -254,8 +254,18 @@ pub struct Character {
     pub at: i64,
 }
 
+/// The addon's record checksum (KFire.lua `checksum`): 31-multiplier hash of
+/// "name|realmNorm|played|at" over UTF-8 bytes, modulo 16777213.
+fn checksum(name: &str, realm_norm: &str, played: i64, at: i64) -> i64 {
+    format!("{name}|{realm_norm}|{played}|{at}")
+        .bytes()
+        .fold(0i64, |h, b| (h * 31 + i64::from(b)) % 16_777_213)
+}
+
 /// The characters of a KFire.lua file, or None when it is unreadable or of
-/// an unknown version.
+/// an unknown version. A record whose checksum does not match was damaged on
+/// disk after the addon wrote it and is left out; records written before the
+/// addon had a checksum are taken as they are.
 pub fn characters(src: &str) -> Option<Vec<Character>> {
     let root = global(src, "KFirePlayed")?;
     if root.num("v")? as i64 != 1 {
@@ -276,6 +286,12 @@ pub fn characters(src: &str) -> Option<Vec<Character>> {
         };
         if played < 0.0 || name.is_empty() || realm_norm.is_empty() {
             continue;
+        }
+        if let Some(chk) = c.num("chk") {
+            if checksum(&name, &realm_norm, played as i64, at as i64) != chk as i64 {
+                log::warn!("wow: record of {name} on {realm_norm} fails its checksum, skipped");
+                continue;
+            }
         }
         out.push(Character {
             region: c.str("region").unwrap_or_else(|| "unknown".into()),
@@ -351,6 +367,31 @@ KFirePlayed = {
         assert!(characters(&REAL[..REAL.len() / 2]).is_none());
         assert!(characters("SomethingElse = { }").is_none());
         assert!(characters("").is_none());
+    }
+
+    #[test]
+    fn checksum_matches_the_addon() {
+        // Same value the Lua harness asserts for this record.
+        assert_eq!(
+            checksum("Aldéide", "Cho'gall", 1_041_454, 1_790_889_833),
+            5_118_125
+        );
+    }
+
+    #[test]
+    fn a_record_damaged_on_disk_is_skipped() {
+        let src = "KFirePlayed = { v = 1, chars = {
+            a = { name = \"Aldéide\", realmNorm = \"Cho'gall\", played = 1041454, at = 1790889833, chk = 5118125 },
+            b = { name = \"Aldé\", realmNorm = \"Elune\", played = 103996806, at = 1790873640, chk = 5118125 },
+            c = { name = \"Old\", realmNorm = \"Elune\", played = 7, at = 1 } } }";
+        let mut c = characters(src).unwrap();
+        c.sort_by(|a, b| a.name.cmp(&b.name));
+        let names: Vec<_> = c.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(
+            names,
+            ["Aldéide", "Old"],
+            "damaged record dropped, unsigned one kept"
+        );
     }
 
     #[test]
