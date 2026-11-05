@@ -12,10 +12,12 @@ pub struct Edition {
 
 /// Editions the addon goes into. Test realms (PTR, beta, alpha) and Blizzard's
 /// internal folders are left alone: their characters are copies, their /played
-/// would be wrong. Forever lives in `wow_classic_beta` while it is in beta.
+/// would be wrong. Forever was `wow_classic_beta` (`_classic_beta_`) during
+/// its beta; released, it is `wowf` in `_forever_`. Both are kept.
 pub fn is_playable(product: &str) -> bool {
     match product {
-        "wow" | "wow_classic" | "wow_classic_era" | "wow_anniversary" | "wow_classic_beta" => true,
+        "wow" | "wow_classic" | "wow_classic_era" | "wow_anniversary" | "wow_classic_beta"
+        | "wowf" => true,
         p => {
             p.starts_with("wow_")
                 && ![
@@ -42,6 +44,7 @@ fn product_of_subfolder(name: &str) -> Option<&'static str> {
         "_classic_era_" => "wow_classic_era",
         "_anniversary_" => "wow_anniversary",
         "_classic_beta_" => "wow_classic_beta",
+        "_forever_" => "wowf",
         "_ptr_" => "wowt",
         "_beta_" => "wow_beta",
         "_xptr_" => "wowxptr",
@@ -243,6 +246,7 @@ pub(crate) mod tests {
             "wow_classic_era",
             "wow_anniversary",
             "wow_classic_beta",
+            "wowf",
             "wow_forever",
         ] {
             assert!(is_playable(p), "{p} should be playable");

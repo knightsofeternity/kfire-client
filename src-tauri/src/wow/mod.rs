@@ -45,7 +45,7 @@ pub fn label(product: &str) -> String {
         "wow_classic" => "Classic",
         "wow_classic_era" => "Classic Era",
         "wow_anniversary" => "Anniversary",
-        "wow_classic_beta" => "Forever",
+        "wow_classic_beta" | "wowf" => "Forever",
         paths::ASCENSION => "Ascension",
         other => other,
     }
@@ -263,6 +263,7 @@ mod tests {
     fn labels() {
         assert_eq!(label("wow"), "Retail");
         assert_eq!(label("wow_classic_beta"), "Forever");
+        assert_eq!(label("wowf"), "Forever");
         assert_eq!(label("ascension"), "Ascension");
         assert_eq!(label("wow_forever"), "wow_forever");
     }
@@ -307,6 +308,48 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 
+    /// The released Forever, as found on a member's PC in November 2026:
+    /// `_forever_/Wow.exe`, `.flavor.info` saying `wowf`, `.build.info`
+    /// listing wowf 1.60.1. Before, the client only knew the beta's
+    /// `wow_classic_beta` and skipped this folder: no addon, no /played.
+    #[test]
+    fn released_forever_gets_the_addon_and_reports_to_forever() {
+        let root = fake_root(
+            "forever",
+            &[("_retail_", Some("wow")), ("_forever_", Some("wowf"))],
+        );
+        std::fs::write(
+            root.join(".build.info"),
+            crate::wow::buildinfo::tests::build_info(&[
+                ("12.1.5.70688", "wow"),
+                ("1.60.1.70790", "wowf"),
+            ]),
+        )
+        .unwrap();
+        let t = targets(Some(&root), None);
+        sync_targets(&t, true).unwrap();
+        assert!(toc(&root.join("_forever_"))
+            .unwrap()
+            .contains("## Interface: 16001\n"));
+        let st = status_targets(&t, true);
+        let forever = st.iter().find(|e| e.product == "wowf").unwrap();
+        assert_eq!(
+            (forever.label.as_str(), forever.state.as_str()),
+            ("Forever", "installed")
+        );
+        assert_eq!(slug_for("wowf"), Some("world-of-warcraft-forever"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn released_forever_is_found_without_flavor_info() {
+        let root = fake_root("forever-noflavor", &[("_forever_", None)]);
+        let eds = paths::editions(&root);
+        assert_eq!(eds.len(), 1);
+        assert_eq!(eds[0].product, "wowf");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn ascension_gets_the_addon_with_a_3_3_5_interface() {
         let asc = std::env::temp_dir().join(format!("kfire-wow-asc-sync-{}", uuid::Uuid::new_v4()));
@@ -339,6 +382,7 @@ mod tests {
             slug_for("wow_classic_beta"),
             Some("world-of-warcraft-forever")
         );
+        assert_eq!(slug_for("wowf"), Some("world-of-warcraft-forever"));
         assert_eq!(slug_for("ascension"), Some("wow-ascension"));
         assert_eq!(slug_for("wowt"), None);
     }
@@ -424,7 +468,7 @@ pub fn slug_for(product: &str) -> Option<&'static str> {
     Some(match product {
         "wow" => "world-of-warcraft",
         "wow_classic" | "wow_classic_era" | "wow_anniversary" => "world-of-warcraft-classic",
-        "wow_classic_beta" => "world-of-warcraft-forever",
+        "wow_classic_beta" | "wowf" => "world-of-warcraft-forever",
         paths::ASCENSION => "wow-ascension",
         _ => return None,
     })
