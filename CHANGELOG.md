@@ -7,6 +7,20 @@ Release, so every version MUST have its own section here before it is tagged.
 The release build fails when one is missing, which is deliberate: publishing a
 version under the previous one's notes has already happened once.
 
+## 0.8.2
+
+### World of Warcraft: Forever gets the addon
+
+Since its release, WoW Forever installs in its own `_forever_` folder, under a
+new product name. The client still looked for it where it lived during its
+beta, so it skipped Forever entirely: no KFire addon there, and no /played
+recorded for your Forever characters. It now finds Forever, installs the addon
+in it and sends its playtime to your server's World of Warcraft: Forever page.
+
+Detection itself is fixed on the server side, no update needed for that:
+Forever and Retail both run Wow.exe, and a Forever session used to be counted
+as Retail.
+
 ## 0.8.1
 
 ### World of Warcraft: a damaged record no longer inflates your hours
