@@ -1,0 +1,17 @@
+## Interface: 16001
+## Title: Appel d'Alliance
+## Notes: Les demandes de groupe de Knights of Eternity et des Cassos de la Lumière, en alerte visible et sonore. Alliance seulement. /alliance pour ouvrir.
+## Author: Knights of Eternity et Les Cassos de la Lumière
+## Version: 1.0.0
+## SavedVariablesPerCharacter: AppelAllianceDB
+## SavedVariables: AppelAllianceCompte
+
+Config.lua
+Socle.lua
+Reseau.lua
+Presence.lua
+Annonces.lua
+Interface.lua
+Toast.lua
+Formulaire.lua
+Accueil.lua
