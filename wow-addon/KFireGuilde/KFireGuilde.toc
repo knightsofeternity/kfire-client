@@ -1,0 +1,13 @@
+## Interface: 16001
+## Title: KFIRE Guilde
+## Notes: Outils de la guilde Knights of Eternity sur WoW Forever : page Guilde, profils, demandes, artisanat, événements, quêtes. Les données passent par des messages d'addon sur le canal de guilde : seuls les membres qui ont l'addon les voient. /ke pour ouvrir.
+## Author: Knights of Eternity
+## Version: 0.1.0
+## SavedVariables: KFireGuildeDB
+
+Socle.lua
+Reseau.lua
+Magasin.lua
+Profil.lua
+Guilde.lua
+Interface.lua

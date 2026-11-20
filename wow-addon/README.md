@@ -16,3 +16,9 @@ Sans Lua installé, depuis la racine du dépôt :
 ```bash
 docker run --rm -v "$PWD/wow-addon":/w -w /w alpine:3.20 sh -c "apk add -q lua5.1 >/dev/null 2>&1 && lua5.1 test/harness.lua"
 ```
+
+## KFIRE Guilde (WoW Forever)
+
+Le dossier `KFireGuilde/` est un deuxième add-on, celui des outils de la guilde dans WoW Forever (page Guilde,
+profils, puis demandes, artisanat, événements, quêtes). Voir [`KFireGuilde/README.md`](KFireGuilde/README.md)
+et le cahier des charges [`docs/kfire-guilde-cahier.md`](docs/kfire-guilde-cahier.md). Banc : `lua5.1 test/guilde.lua`.
