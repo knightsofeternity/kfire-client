@@ -1,4 +1,4 @@
--- Banc hors jeu de KFIRE Guilde (lot 1). Lua 5.1, comme WoW.
+-- Banc hors jeu de KFIRE Guilde (lots 1 à 4). Lua 5.1, comme WoW.
 --
 -- Plusieurs joueurs simulés, chacun avec son propre addon chargé (son propre
 -- environnement Lua), parlent sur un même canal de guilde factice. Le temps est
@@ -20,7 +20,9 @@ end
 
 local W
 local function nouveauMonde()
-	W = { now = 1763600000, minuteurs = {}, joueurs = {}, guilde = {}, envoisRefuses = 0 }
+	W = { now = 1763600000, minuteurs = {}, joueurs = {}, guilde = {}, envoisRefuses = 0,
+		objets = { [2589] = "Étoffe de lin", [2996] = "Rouleau d'étoffe de lin", [4343] = "Pantalon en lin brun" },
+		sorts = { [7418] = "Enchantement de bracelets (Vie mineure)" } }
 	math.randomseed(42)
 end
 
@@ -102,7 +104,7 @@ local function joueur(nom, opts)
 	j.env = env
 	local prenom, royaume = nom:match("^([^-]+)-(.+)$")
 	env.print = function(s) j.imprime[#j.imprime + 1] = s end
-	env.time = function() return W.now end
+	env.time = function(t) if t then return os.time(t) end return W.now end
 	env.GetServerTime = env.time
 	env.date = os.date
 	env.C_Timer = { After = programmer }
@@ -148,6 +150,42 @@ local function joueur(nom, opts)
 	end
 	env.C_PartyInfo = { InviteUnit = function(n) j.invite = n end }
 	env.ChatFrame_SendTell = function(n) j.chuchote = n end
+	-- objets, métiers, quêtes, calendrier (lots 2 à 4)
+	j.sacs, j.quetes = {}, {}
+	env.GetItemCount = function(id) return j.sacs[tonumber(id)] or 0 end
+	env.GetItemInfo = function(x)
+		for id, n in pairs(W.objets) do
+			if x == n or tonumber(x) == id then return n, ("|cffffffff|Hitem:%d::::|h[%s]|h|r"):format(id, n) end
+		end
+	end
+	env.GetSpellInfo = function(id) return W.sorts[id] end
+	env.InCombatLockdown = function() return false end
+	env.hooksecurefunc = function() end
+	env.GetNumSkillLines = function() return #(j.competences or {}) end
+	env.GetSkillLineInfo = function(i)
+		local c = j.competences[i]
+		return c[1], c[2], false, c[3], 0, 0, c[4]
+	end
+	env.GetTradeSkillLine = function() return j.fenetre.nom, j.fenetre.rang, j.fenetre.max end
+	env.GetNumTradeSkills = function() return #j.fenetre.recettes end
+	env.GetTradeSkillInfo = function(i)
+		local r = j.fenetre.recettes[i]
+		return r.nom, r.entete and "header" or "easy"
+	end
+	env.GetTradeSkillItemLink = function(i)
+		local r = j.fenetre.recettes[i]
+		return r.id and ("|cffffffff|Hitem:%d::::|h[%s]|h|r"):format(r.id, r.nom) or nil
+	end
+	env.GetTradeSkillRecipeLink = function(i)
+		local r = j.fenetre.recettes[i]
+		return r.sort and ("|cffffd000|Henchant:%d|h[%s]|h|r"):format(r.sort, r.nom) or nil
+	end
+	env.GetNumQuestLogEntries = function() return #j.quetes end
+	env.GetQuestLogTitle = function(i)
+		local q = j.quetes[i]
+		return q[2], 20, nil, q.entete or false, false, nil, nil, q[1]
+	end
+	env.C_Calendar = W.calendrier and W.calendrier(j) or nil
 	env.KFireGuildeDB = opts.db
 	j.ns = {}
 	for _, f in ipairs(FICHIERS) do
@@ -307,7 +345,7 @@ verifier(#ns2.listeGuilde({ recherche = "carmines" }) == 1, "la recherche trouve
 local parRang = ns2.listeGuilde({ tri = "rang" })
 verifier(parRang[1].nom == "Trayn-Chogall", "tri par rang : le Maître en premier")
 verifier(r[1].etatVersion == "ajour", "même version : à jour")
-ns2.ranger("membres", "Trayn-Chogall", W.now + 100, "Trayn-Chogall", { "Trayn", "Trayn-Chogall", "T", "0.2.0" })
+ns2.ranger("membres", "Trayn-Chogall", W.now + 100, "Trayn-Chogall", { "Trayn", "Trayn-Chogall", "T", "0.9.0" })
 verifier(ns2.listeGuilde({ recherche = "trayn" })[1].etatVersion == "recente", "une version plus récente est signalée")
 local total, enLigne, addon = ns2.compteGuilde()
 verifier(total == 5 and enLigne == 4 and addon == 4, "compte de l'entête : 5 membres, 4 en ligne, 4 avec l'addon")
@@ -341,7 +379,253 @@ verifier(nouveau.ns.profilPropose, "un profil incomplet ouvre le formulaire la p
 nouveau.ns.ouvrir("options")
 verifier(nouveau.ns.pages.options:IsShown() and not p:IsShown(), "le menu change de page")
 nouveau.env.SlashCmdList.KFIREGUILDE("diag")
-verifier(#nouveau.imprime >= 5 and nouveau.imprime[1]:find("0.1.0"), "/ke diag affiche le diagnostic")
+verifier(#nouveau.imprime >= 5 and nouveau.imprime[1]:find(nouveau.ns.VERSION, 1, true), "/ke diag affiche le diagnostic")
+
+-- ================================================================== lots 2 à 4
+
+local function lien(id) return ("|cffffffff|Hitem:%d::::|h[%s]|h|r"):format(id, W.objets[id]) end
+local function derniereBulle(j) return j.ns.bullesRecentes[1] and j.ns.bullesRecentes[1].texte or "" end
+
+-- Un calendrier du jeu factice, le même pour tous : un raid dans deux jours.
+local function calendrierFactice(evenements)
+	return function(j)
+		local C = {}
+		C.OpenCalendar = function() programmer(0.2, function() declencher(j.env, "CALENDAR_UPDATE_GUILD_EVENTS") end) end
+		C.SetAbsMonth = function() end
+		C.GetNumGuildEvents = function() return #evenements end
+		C.GetGuildEventInfo = function(i)
+			local e = evenements[i]
+			local d = os.date("*t", e.quand)
+			return { title = e.titre, year = d.year, month = d.month, monthDay = d.day, hour = d.hour, minute = d.min,
+				eventType = 0, calendarType = "GUILD_EVENT", eventID = e.id }
+		end
+		C.GetGuildEventSelectionInfo = function(i) return 0, os.date("*t", evenements[i].quand).day, i end
+		C.OpenEvent = function(_, _, i)
+			j.ouvert = evenements[i]
+			programmer(0.1, function() declencher(j.env, "CALENDAR_OPEN_EVENT", "GUILD") end)
+		end
+		C.GetEventInfo = function()
+			local e = j.ouvert
+			local d = os.date("*t", e.quand)
+			return { title = e.titre, description = "Réunion devant MC", creator = "Trayn", inviteType = 1,
+				calendarType = "GUILD_EVENT", time = { year = d.year, month = d.month, monthDay = d.day, hour = d.hour, minute = d.min } }
+		end
+		C.GetNumInvites = function() return #j.ouvert.inscrits end
+		C.EventGetInvite = function(i) return j.ouvert.inscrits[i] end
+		C.IsActionPending = function() return false end
+		local function repondre(quoi, etat)
+			return function()
+				j.reponse = quoi
+				table.insert(j.ouvert.inscrits, { name = j.nom:match("^[^-]+"), inviteStatus = etat, classFilename = "MAGE" })
+			end
+		end
+		C.EventSignUp = repondre("EventSignUp", 6)
+		C.EventAvailable = repondre("EventAvailable", 1)
+		C.EventTentative = repondre("EventTentative", 8)
+		C.EventDecline = repondre("EventDecline", 2)
+		return C
+	end
+end
+
+nouveauMonde()
+W.guilde = GUILDE
+local raid = { titre = "Raid Cœur du Magma", quand = W.now + 2 * 86400, id = 11, inscrits = {} }
+local evenements = { raid }
+W.calendrier = calendrierFactice(evenements)
+o = joueur("Ouranos-Chogall")
+mk = joueur("Malkai-Chogall")
+n = joueur("Nenos-Chogall")
+connecter(o) connecter(mk) connecter(n)
+avancer(20)
+
+-- ------------------------------------------------------------------ demandes
+
+mk.sacs[2589] = 30
+verifier(o.ns.publierDemande({ type = "R", objet = "", qte = 2 }) == nil, "une demande sans objet est refusée")
+verifier(o.ns.publierDemande({ type = "R", objet = lien(2589), qte = 0 }) == nil, "une quantité de 0 est refusée")
+local cle = o.ns.publierDemande({ type = "R", objet = lien(2589), qte = 20, texte = "pour des sacs~de 6" })
+avancer(2)
+local dm = mk.ns.fiches("demandes")[cle]
+verifier(dm and dm.objet == "2589" and dm.nom == "Étoffe de lin" and dm.qte == "20" and dm.etat == "O",
+	"la demande d'Ouranos arrive chez Malkai (objet, quantité, état)")
+local pm = mk.ns.listeDemandes({ filtre = "pourmoi" })
+verifier(#pm == 1 and pm[1].possede == 30, "Malkai la voit dans « Pour moi » : il en a 30")
+verifier(derniereBulle(mk):find("Étoffe de lin", 1, true) and derniereBulle(mk):find("tu en as 30", 1, true),
+	"une bulle prévient Malkai qu'il peut l'honorer")
+verifier(#n.ns.listeDemandes({ filtre = "pourmoi" }) == 0 and #n.ns.listeDemandes({}) == 1,
+	"Nenos la voit dans les ouvertes, pas dans « Pour moi »")
+verifier(not o.ns.actionsDemande(cle).prendre and o.ns.actionsDemande(cle).retirer, "l'auteur ne prend pas sa propre demande, il peut la retirer")
+verifier(n.ns.retirerDemande(cle) == nil, "un simple membre ne retire pas la demande d'un autre")
+
+verifier(mk.ns.prendreDemande(cle) == true, "Malkai prend la demande")
+avancer(2)
+verifier(o.ns.fiches("demandes")[cle].etat == "P" and o.ns.fiches("demandes")[cle].preneur == "Malkai-Chogall",
+	"Ouranos voit qui s'en occupe")
+verifier(derniereBulle(o):find("s'occupe de ta demande", 1, true), "et une bulle le lui dit")
+verifier(n.ns.prendreDemande(cle) == nil, "une demande prise ne se prend pas deux fois")
+mk.ns.honorerDemande(cle)
+avancer(2)
+verifier(o.ns.fiches("demandes")[cle].etat == "H" and derniereBulle(o):find("a honoré", 1, true), "honorée : l'auteur est prévenu")
+verifier(#o.ns.listeDemandes({ filtre = "ouvertes" }) == 0 and #o.ns.listeDemandes({ filtre = "toutes" }) == 1,
+	"une demande honorée sort des ouvertes")
+
+-- modération : un officier retire la demande d'un membre
+local cle2 = n.ns.publierDemande({ type = "R", objet = "Plume magique", qte = 5 })
+avancer(2)
+verifier(o.ns.peutModerer() and not mk.ns.peutModerer(), "Ouranos (officier) peut modérer, Malkai (membre) non")
+verifier(o.ns.retirerDemande(cle2) == true, "l'officier retire la demande de Nenos")
+avancer(2)
+verifier(n.ns.fiches("demandes")[cle2].etat == "X", "Nenos la voit retirée")
+
+-- celui qui arrive reçoit les demandes par la synchro
+local t2 = joueur("Trayn-Chogall")
+connecter(t2)
+avancer(20)
+verifier(t2.ns.fiches("demandes")[cle] and t2.ns.fiches("demandes")[cle2], "un membre qui arrive reçoit les demandes par la synchro")
+
+-- durées de vie : honorée 3 jours, ouverte 30 jours
+local fd = o.ns.fiches("demandes")
+fd["Vieux-Chogall/1"] = { _maj = W.now - 4 * 86400, etat = "H", nom = "x" }
+fd["Vieux-Chogall/2"] = { _maj = W.now - 4 * 86400, etat = "O", nom = "y" }
+fd["Vieux-Chogall/3"] = { _maj = W.now - 31 * 86400, etat = "O", nom = "z" }
+o.ns.nettoyerMagasins()
+verifier(not fd["Vieux-Chogall/1"] and fd["Vieux-Chogall/2"] and not fd["Vieux-Chogall/3"],
+	"honorée oubliée après 3 jours, ouverte gardée 30 jours")
+
+-- ------------------------------------------------------------------ métiers
+
+mk.fenetre = { nom = "Couture", rang = 75, max = 150, recettes = {
+	{ nom = "Couture", entete = true }, { nom = "Rouleau d'étoffe de lin", id = 2996 }, { nom = "Pantalon en lin brun", id = 4343 },
+} }
+declencher(mk.env, "TRADE_SKILL_SHOW")
+avancer(6)
+local fm2 = o.ns.fiches("metiers")["Malkai-Chogall/Couture"]
+verifier(fm2 and fm2.niveau == "75" and fm2.recettes == "2996,4343", "ouvrir la fenêtre de métier publie niveau et recettes")
+verifier(o.ns.fabricants(4343)[1] == "Malkai-Chogall", "Ouranos sait que Malkai fabrique le pantalon")
+local rr = o.ns.chercherRecettes("pantalon")
+verifier(#rr == 1 and rr[1].fabricants[1] == "Malkai-Chogall", "« qui sait fabriquer pantalon » : Malkai")
+local envoisAvant = mk.envois
+mk.fenetre.recettes = { { nom = "Pantalon en lin brun", id = 4343 } }  -- un filtre dans la fenêtre
+declencher(mk.env, "TRADE_SKILL_UPDATE")
+avancer(6)
+verifier(o.ns.fiches("metiers")["Malkai-Chogall/Couture"].recettes == "2996,4343" and mk.envois == envoisAvant,
+	"un filtre de la fenêtre ne fait oublier aucune recette (et rien ne repart)")
+
+o.fenetre = { nom = "Enchantement", rang = 120, max = 150, recettes = { { nom = "Enchantement de bracelets (Vie mineure)", sort = 7418 } } }
+declencher(o.env, "TRADE_SKILL_SHOW")
+avancer(6)
+verifier(mk.ns.fiches("metiers")["Ouranos-Chogall/Enchantement"].recettes == "s7418"
+	and #mk.ns.chercherRecettes("bracelets") == 1, "un enchantement est noté par son sort et se retrouve par son nom")
+
+o.competences = { { "Métiers", true }, { "Enchantement", false, 121, 150 }, { "Compétences secondaires", true },
+	{ "Cuisine", false, 50, 75 }, { "Armes", true }, { "Épées", false, 100, 300 } }
+o.ns.lireNiveaux()
+avancer(6)
+local fo = mk.ns.fiches("metiers")
+verifier(fo["Ouranos-Chogall/Cuisine"] and fo["Ouranos-Chogall/Cuisine"].niveau == "50" and not fo["Ouranos-Chogall/Épées"]
+	and fo["Ouranos-Chogall/Enchantement"].niveau == "121" and fo["Ouranos-Chogall/Enchantement"].recettes == "s7418",
+	"les niveaux viennent des compétences (métiers seulement), les recettes sont gardées")
+
+-- une demande d'artisanat : celui qui sait la fabriquer est prévenu
+local cle3 = o.ns.publierDemande({ type = "A", objet = lien(4343), qte = 1 })
+avancer(2)
+verifier(derniereBulle(mk):find("tu sais le fabriquer", 1, true) and mk.ns.listeDemandes({ filtre = "pourmoi" })[1].cle == cle3,
+	"Malkai, couturier, est prévenu d'une demande de pantalon")
+
+-- ------------------------------------------------------------------ événements
+
+verifier(o.ns.calendrierDisponible() and #o.ns.listeEvenements() == 1 and o.ns.listeEvenements()[1].titre == raid.titre,
+	"les événements de guilde du calendrier sont lus")
+verifier(not derniereBulle(o):find("Nouvel événement", 1, true), "la première lecture ne fait pas de bulle")
+evenements[2] = { titre = "Sortie Mortemines", quand = W.now + 5 * 86400, id = 12, inscrits = {} }
+declencher(o.env, "CALENDAR_UPDATE_GUILD_EVENTS")
+avancer(2)
+verifier(derniereBulle(o):find("Sortie Mortemines", 1, true), "un nouvel événement fait une bulle")
+local ev = o.ns.listeEvenements()[1]
+verifier(o.ns.repondreEvenement(ev.cle, "oui") == true, "répondre à un événement pas encore ouvert")
+avancer(3)
+verifier(o.reponse == "EventSignUp", "un événement à inscription prend « EventSignUp »")
+verifier(o.ns.detailEvenement and o.ns.detailEvenement.compte.oui == 1 and o.ns.detailEvenement.description == "Réunion devant MC",
+	"le détail est relu : description et inscrits")
+evenements[3] = { titre = "Hier", quand = W.now - 86400, id = 13, inscrits = {} }
+verifier(#o.ns.listeEvenements() == 2, "un événement passé n'est pas listé")
+W.calendrier = nil
+local sansCal = joueur("Sansaddon-Chogall")
+connecter(sansCal)
+avancer(15)
+verifier(not sansCal.ns.calendrierDisponible() and #sansCal.ns.listeEvenements() == 0, "sans C_Calendar, la liste est vide et rien ne plante")
+sansCal.connecte = false
+
+-- ------------------------------------------------------------------ présence
+
+o.ns.lireRoster() mk.ns.lireRoster()
+verifier(mk.ns.estPublieurPresence() and not o.ns.estPublieurPresence(), "un seul publie la présence : le premier par ordre alphabétique")
+local envoisO = o.envois
+o.ns.releverPresence()
+mk.ns.releverPresence()
+avancer(2)
+local jour = os.date("%Y%m%d", W.now)
+local heure = tonumber(os.date("%H", W.now)) + 1
+local fp = o.ns.fiches("presence")[jour]
+verifier(o.envois == envoisO and fp and o.ns.decouper(fp.h, ",")[heure] == "4", "Malkai publie le relevé (4 en ligne), Ouranos se tait")
+o.ns.ranger("presence", "20251101", 10, "X", { "3,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-" })
+o.ns.ranger("presence", "20251101", 5, "Y", { "1,6,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-" })
+verifier(o.ns.fiches("presence")["20251101"].h:sub(1, 4) == "3,6,", "deux relevés d'un même jour se fusionnent (le plus grand par heure)")
+-- quatre mardis à 21h bien remplis
+local fiches = o.ns.fiches("presence")
+for k in pairs(fiches) do fiches[k] = nil end
+for s = 1, 4 do
+	local t = W.now - s * 7 * 86400
+	local h = {}
+	for i = 1, 24 do h[i] = "1" end
+	h[22] = tostring(10 + s)
+	fiches[os.date("%Y%m%d", t)] = { _maj = t, h = table.concat(h, ",") }
+end
+local best = o.ns.meilleursCreneaux(5)
+local wday = tonumber(os.date("%w", W.now))
+verifier(#best == 5 and best[1].heure == 21 and best[1].jour == (wday == 0 and 7 or wday) and math.abs(best[1].moyenne - 12.5) < 0.01,
+	"semaine type : le meilleur créneau est le bon jour à 21h (12,5 en moyenne)")
+fiches["20200101"] = { _maj = W.now, h = "1" }
+o.ns.nettoyerMagasins()
+verifier(not fiches["20200101"] and fiches[os.date("%Y%m%d", W.now - 28 * 86400)], "un jour de plus de 8 semaines est oublié, même fusionné récemment")
+
+-- ------------------------------------------------------------------ quêtes
+
+o.quetes = { { 101, "La Mine" }, { 102, "Les Défias" }, { 0, "Marche de l'Ouest", entete = true } }
+mk.quetes = { { 102, "Les Défias" }, { 103, "Les Gnolls" } }
+n.quetes = { { 103, "Les Gnolls" } }
+declencher(o.env, "QUEST_LOG_UPDATE")
+declencher(mk.env, "QUEST_LOG_UPDATE")
+declencher(n.env, "QUEST_LOG_UPDATE")
+avancer(10)
+local qc = o.ns.quetesEnCommun()
+verifier(#qc == 1 and qc[1].nom == "Malkai-Chogall" and qc[1].quetes[1].titre == "Les Défias", "Ouranos et Malkai ont « Les Défias » en commun")
+local qm = mk.ns.quetesEnCommun()
+verifier(#qm == 2 and #mk.ns.quetesPartagees() == 2, "Malkai partage une quête avec Ouranos et une avec Nenos")
+verifier(derniereBulle(o):find("Les Défias", 1, true), "une bulle le dit")
+local nb = #o.ns.bullesRecentes
+declencher(mk.env, "QUEST_LOG_UPDATE")
+mk.quetes[3] = { 104, "Autre" }
+avancer(10)
+verifier(#o.ns.bullesRecentes == nb, "pas deux fois la même bulle")
+deconnecter(mk)
+o.ns.lireRoster()
+verifier(#o.ns.quetesEnCommun() == 0, "un membre hors ligne ne compte plus")
+
+-- ------------------------------------------------------------------ pages
+
+for _, page in ipairs({ "demandes", "artisanat", "evenements", "stats", "quetes", "accueil" }) do
+	o.ns.ouvrir(page)
+	verifier(o.ns.pages[page]:IsShown(), "la page " .. page .. " s'ouvre")
+end
+o.ns.ouvrir("demandes")
+local pd = o.ns.pages.demandes
+verifier(pd.liste.lignes[1]._shown, "la page Demandes liste les demandes")
+o.ns.ouvrir("artisanat")
+verifier(o.ns.pages.artisanat.liste.lignes[1]._shown, "la page Artisanat liste les métiers")
+o.env.SlashCmdList.KFIREGUILDE("quetes")
+verifier(o.ns.pages.quetes:IsShown(), "/ke quetes ouvre la page Quêtes")
+
 
 -- ------------------------------------------------------------------ aucune erreur avalée
 

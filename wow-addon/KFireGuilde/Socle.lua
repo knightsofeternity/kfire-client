@@ -7,7 +7,7 @@
 local ADDON, ns = ...
 
 ns.ADDON = ADDON or "KFireGuilde"
-ns.VERSION = "0.1.0"
+ns.VERSION = "0.2.0"
 ns.PROTO = 1          -- version du protocole réseau : un message d'une autre version est ignoré
 ns.PREFIXE = "KFGU"   -- préfixe des messages d'addon (16 caractères au plus)
 
@@ -20,6 +20,19 @@ end
 
 function ns.apres(delai, fn)
 	C_Timer.After(delai, fn)
+end
+
+-- Regroupe les appels rapprochés : fn ne part qu'une fois, « delai » après le dernier appel.
+local regroupes = {}
+function ns.regrouper(cle, delai, fn)
+	local jeton = {}
+	regroupes[cle] = jeton
+	ns.apres(delai, function()
+		if regroupes[cle] ~= jeton then return end
+		regroupes[cle] = nil
+		local ok, err = pcall(fn)
+		if not ok then ns.erreur(err) end
+	end)
 end
 
 -- ------------------------------------------------------------------ erreurs
@@ -85,6 +98,8 @@ function ns.preparerDB()
 	db.reglages = db.reglages or {}
 	db.magasins = db.magasins or {}
 	db.derniereSynchro = db.derniereSynchro or 0
+	db.noms = db.noms or {}          -- [id d'objet] = nom, pour chercher hors du cache du jeu
+	db.vus = db.vus or {}            -- ce qui a déjà fait l'objet d'une bulle
 	ns.db = db
 	return db
 end
@@ -130,6 +145,64 @@ function ns.comparerVersions(a, b)
 		if x ~= y then return x < y and -1 or 1 end
 	end
 	return 0
+end
+
+-- ------------------------------------------------------------------ objets
+
+-- Un lien d'objet (« |Hitem:2589:…|h[Étoffe de lin]|h ») ou un texte : renvoie id, nom.
+-- Un sort (enchantement) devient l'id « s7418 ».
+function ns.lireObjet(texte)
+	texte = tostring(texte or "")
+	local id, nom = texte:match("|Hitem:(%d+)[^|]*|h%[(.-)%]|h")
+	if id then
+		ns.db.noms[id] = nom
+		return id, nom
+	end
+	local sort, nomSort = texte:match("|H[a-z]+:(%d+)[^|]*|h%[(.-)%]|h")
+	if sort then
+		ns.db.noms["s" .. sort] = nomSort
+		return "s" .. sort, nomSort
+	end
+	nom = texte:gsub("^%s+", ""):gsub("%s+$", "")
+	if nom == "" then return nil, nil end
+	-- un nom d'objet que le jeu connaît déjà (dans son cache)
+	local lien = GetItemInfo and select(2, GetItemInfo(nom))
+	if lien then
+		local i = lien:match("item:(%d+)")
+		if i then ns.db.noms[i] = nom return i, nom end
+	end
+	for i, n in pairs(ns.db.noms) do
+		if n:lower() == nom:lower() then return i, n end
+	end
+	return nil, nom
+end
+
+function ns.nomObjet(id)
+	if not id then return nil end
+	id = tostring(id)
+	local n = ns.db.noms[id]
+	if n then return n end
+	local num = tonumber(id:match("^s?(%d+)$"))
+	if not num then return nil end
+	if id:sub(1, 1) == "s" then
+		n = GetSpellInfo and GetSpellInfo(num)
+		if type(n) == "table" then n = n.name end
+	else
+		n = (C_Item and C_Item.GetItemNameByID and C_Item.GetItemNameByID(num)) or (GetItemInfo and GetItemInfo(num))
+		if not n and C_Item and C_Item.RequestLoadItemDataByID then pcall(C_Item.RequestLoadItemDataByID, num) end
+	end
+	if n then ns.db.noms[id] = n end
+	return n
+end
+
+-- Combien j'en ai, sacs et banque (la banque est celle vue à la dernière visite).
+function ns.compter(id)
+	local num = tonumber(id)
+	if not num then return 0 end
+	local f = (C_Item and C_Item.GetItemCount) or GetItemCount
+	if not f then return 0 end
+	local ok, n = pcall(f, num, true)
+	return ok and tonumber(n) or 0
 end
 
 -- ------------------------------------------------------------------ instance

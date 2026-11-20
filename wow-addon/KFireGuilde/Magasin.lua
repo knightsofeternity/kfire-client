@@ -20,7 +20,11 @@ local DELAI_SYNCHRO = 8           -- après la connexion, le temps que la liste 
 
 ns.magasins = {}
 
--- def : { champs = { "pseudo", "main"… }, dureeVie = secondes }
+-- def : { champs = { "pseudo", "main"… },
+--         dureeVie = secondes, ou function(fiche, cle) → secondes,
+--         fusionner = function(avant, nouvelle) → fiche (facultatif) }
+-- Sans « fusionner », la plus récente gagne. Avec, les deux versions se combinent
+-- (les relevés de présence prennent le plus grand nombre de chaque heure).
 function ns.magasin(nom, def)
 	def.nom = nom
 	ns.magasins[nom] = def
@@ -41,11 +45,23 @@ function ns.ranger(nom, cle, maj, auteur, valeurs)
 	maj = tonumber(maj) or 0
 	local fiches = donnees(nom)
 	local avant = fiches[cle]
-	if avant and avant._maj >= maj then return false end
 	local f = { _maj = maj, _auteur = auteur }
 	for i, champ in ipairs(def.champs) do
 		local v = valeurs[i]
-		if v ~= nil and v ~= "" then f[champ] = v end
+		if v ~= nil and v ~= "" then f[champ] = tostring(v) end
+	end
+	if def.fusionner and avant then
+		local fusion = def.fusionner(avant, f)
+		local pareil = true
+		for _, champ in ipairs(def.champs) do
+			if fusion[champ] ~= avant[champ] then pareil = false end
+		end
+		if pareil then return false end
+		fusion._maj = math.max(avant._maj or 0, maj)
+		fusion._auteur = auteur
+		f = fusion
+	elseif avant and avant._maj >= maj then
+		return false
 	end
 	fiches[cle] = f
 	ns.signaler(nom, cle, f)
@@ -88,7 +104,9 @@ function ns.nettoyerMagasins()
 		if def.dureeVie then
 			local fiches = donnees(nom)
 			for cle, f in pairs(fiches) do
-				if maintenant - (f._maj or 0) > def.dureeVie then fiches[cle] = nil end
+				local vie = def.dureeVie
+				if type(vie) == "function" then vie = vie(f, cle) end
+				if vie and maintenant - (f._maj or 0) > vie then fiches[cle] = nil end
 			end
 		end
 	end
@@ -151,6 +169,12 @@ end
 
 ns.surSignal("charge", function()
 	ns.nettoyerMagasins()
+	-- et une fois par heure, pour ceux qui restent connectés longtemps
+	local function boucle()
+		ns.nettoyerMagasins()
+		ns.apres(3600, boucle)
+	end
+	ns.apres(3600, boucle)
 end)
 
 ns.surSignal("connexion", function()

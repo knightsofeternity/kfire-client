@@ -1,7 +1,8 @@
 -- KFIRE Guilde : la fenêtre (menu à gauche, une page par fonction), le formulaire
 -- de profil, le médaillon à l'écran et la commande /ke.
 --
--- Lot 1 : Accueil, Guilde et Options. Les autres pages annoncent leur lot.
+-- Les pages Demandes, Artisanat, Événements, Statistiques et Quêtes sont dans les
+-- fichiers Page*.lua : elles s'inscrivent dans ns.constructeurs et utilisent ns.ui.
 local _, ns = ...
 
 local LARGEUR, HAUTEUR = 860, 540
@@ -62,6 +63,53 @@ end
 local function inviter(nom)
 	if C_PartyInfo and C_PartyInfo.InviteUnit then C_PartyInfo.InviteUnit(nom)
 	elseif InviteUnit then InviteUnit(nom) end
+end
+
+local function saisie(parent, largeur, x, y)
+	local e = CreateFrame("EditBox", nil, parent, "InputBoxTemplate")
+	e:SetSize(largeur, 22)
+	e:SetPoint("TOPLEFT", x, y)
+	e:SetAutoFocus(false)
+	return e
+end
+
+-- Les outils partagés avec les pages des autres fichiers.
+ns.ui = {
+	texte = texte, bouton = bouton, saisie = saisie, couleurClasse = couleurClasse,
+	chuchoter = chuchoter, inviter = inviter,
+	ORANGE = ORANGE, OR = OR, GRIS = GRIS, VERT = VERT, BLEU = BLEU, ROUGE = "|cffee7f75",
+}
+ns.constructeurs = {}   -- [code de page] = function(page)
+
+-- Une liste de lignes cliquables avec la molette : { lignes, rafraichir(donnees) }.
+-- faire(ligne) crée les textes d'une ligne ; remplir(ligne, donnee) les met à jour.
+function ns.ui.liste(p, y, nombre, hauteur, largeur, faire, remplir)
+	local l = { lignes = {}, decalage = 0, donnees = {} }
+	for i = 1, nombre do
+		local r = CreateFrame("Button", nil, p)
+		r:SetSize(largeur, hauteur)
+		r:SetPoint("TOPLEFT", 0, y - (i - 1) * hauteur)
+		r:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+		r:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
+		faire(r)
+		r:Hide()
+		l.lignes[i] = r
+	end
+	function l.rafraichir(donnees)
+		l.donnees = donnees or l.donnees
+		l.decalage = math.max(0, math.min(l.decalage, #l.donnees - nombre))
+		for i = 1, nombre do
+			local r, d = l.lignes[i], l.donnees[i + l.decalage]
+			r.donnee = d
+			if d then remplir(r, d) r:Show() else r:Hide() end
+		end
+	end
+	p:EnableMouseWheel(true)
+	p:SetScript("OnMouseWheel", function(_, sens)
+		l.decalage = math.max(0, l.decalage - sens * 3)
+		l.rafraichir()
+	end)
+	return l
 end
 
 -- ------------------------------------------------------------------ formulaire de profil
@@ -263,8 +311,27 @@ local function construireAccueil(p)
 		local lignes = {
 			("%d membres dans la guilde, %d en ligne, %d avec l'addon."):format(total, enLigne, addon),
 			"",
-			OR .. "Bientôt ici|r : les demandes que tu peux honorer, les prochains événements et les membres qui font les mêmes quêtes que toi.",
 		}
+		local ouvertes, pourMoi = ns.compteDemandes()
+		lignes[#lignes + 1] = OR .. "Demandes|r : " .. ouvertes .. " ouverte(s)"
+			.. (pourMoi > 0 and (", " .. VERT .. pourMoi .. " que tu peux honorer|r") or "") .. "."
+		local evs = ns.listeEvenements()
+		if #evs > 0 then
+			lignes[#lignes + 1] = OR .. "Prochain événement|r : " .. evs[1].titre .. ", " .. date("%A %d/%m à %Hh%M", evs[1].quand) .. "."
+		elseif ns.calendrierDisponible() then
+			lignes[#lignes + 1] = OR .. "Événements|r : rien de prévu dans les 30 jours."
+		end
+		local qc = ns.quetesEnCommun()
+		if #qc > 0 then
+			local noms = {}
+			for i = 1, math.min(3, #qc) do noms[i] = qc[i].affichage end
+			lignes[#lignes + 1] = OR .. "Quêtes en commun|r avec " .. table.concat(noms, ", ") .. (#qc > 3 and "…" or "") .. "."
+		end
+		local c = ns.meilleursCreneaux(1)[1]
+		if c then
+			lignes[#lignes + 1] = OR .. "Meilleur créneau|r : " .. ns.JOURS[c.jour] .. " " .. c.heure .. "h ("
+				.. ("%.1f"):format(c.moyenne) .. " en ligne en moyenne)."
+		end
 		local s = ns.synchro.recue
 		if s then
 			lignes[#lignes + 1] = ""
@@ -272,6 +339,12 @@ local function construireAccueil(p)
 		end
 		p.corps:SetText(table.concat(lignes, "\n"))
 	end)
+end
+
+local function compter(magasin)
+	local n = 0
+	for _ in pairs(ns.fiches(magasin)) do n = n + 1 end
+	return n
 end
 
 local function diagnostic()
@@ -285,6 +358,9 @@ local function diagnostic()
 			:format(s.envoyes, s.refusDebit, s.echecs, s.recus, s.ignores, ns.enAttente()),
 		("En instance : %s ; dernière synchro : %s"):format(ns.enInstance and "oui" or "non",
 			ns.db.derniereSynchro > 0 and date("%d/%m %Hh%M", ns.db.derniereSynchro) or "jamais"),
+		("Fiches : %d membres, %d demandes, %d métiers, %d jours de présence, %d listes de quêtes ; calendrier : %s")
+			:format(compter("membres"), compter("demandes"), compter("metiers"), compter("presence"), compter("quetes"),
+				ns.calendrierDisponible() and "lisible" or "absent"),
 		"Dernière erreur : " .. (ns.derniereErreur or "aucune"),
 	}, "\n")
 end
@@ -298,20 +374,36 @@ local function construireOptions(p)
 		ns.db.reglages.medaillonCache = not self:GetChecked()
 		ns.majMedaillon()
 	end)
-	bouton(p, "Mon profil", 120, ouvrirProfil):SetPoint("TOPLEFT", 0, -40)
-	texte(p, "GameFontNormal", 0, -84):SetText("Diagnostic (à copier en cas de problème, /ke diag)")
-	local d = texte(p, "GameFontHighlightSmall", 0, -104)
+	local cases = {}
+	local y = -28
+	for _, b in ipairs({
+		{ "bullesDemandesCoupees", "Bulle quand un membre demande ce que je peux honorer" },
+		{ "bullesEvenementsCoupees", "Bulle pour chaque nouvel événement de guilde" },
+		{ "bullesQuetesCoupees", "Bulle quand un membre en ligne fait une de mes quêtes" },
+	}) do
+		local k = CreateFrame("CheckButton", nil, p, "UICheckButtonTemplate")
+		k:SetPoint("TOPLEFT", 0, y)
+		texte(p, "GameFontHighlight", 32, y - 7):SetText(b[2])
+		k:SetScript("OnClick", function(self) ns.db.reglages[b[1]] = not self:GetChecked() end)
+		cases[b[1]] = k
+		y = y - 28
+	end
+	bouton(p, "Mon profil", 120, ouvrirProfil):SetPoint("TOPLEFT", 0, y - 12)
+	texte(p, "GameFontNormal", 0, y - 56):SetText("Diagnostic (à copier en cas de problème, /ke diag)")
+	local d = texte(p, "GameFontHighlightSmall", 0, y - 76)
 	d:SetWidth(640)
 	p:SetScript("OnShow", function()
 		c:SetChecked(not ns.db.reglages.medaillonCache)
+		for cle, k in pairs(cases) do k:SetChecked(not ns.db.reglages[cle]) end
 		d:SetText(diagnostic())
 	end)
 end
 
-local function construireAVenir(lot, ce)
+local function construireDepuis(code, ce)
 	return function(p)
+		local fn = ns.constructeurs[code]
+		if fn then return fn(p) end
 		texte(p, "GameFontNormalLarge", 0, 0):SetText(ce)
-		texte(p, "GameFontHighlight", 0, -34):SetText(GRIS .. "Arrive avec le lot " .. lot .. ".|r")
 	end
 end
 
@@ -320,11 +412,11 @@ end
 local SECTIONS = {
 	{ "accueil", "Accueil", construireAccueil },
 	{ "guilde", "Guilde", construireGuilde },
-	{ "demandes", "Demandes", construireAVenir(2, "Demandes de la guilde") },
-	{ "artisanat", "Artisanat", construireAVenir(2, "Qui sait fabriquer quoi") },
-	{ "evenements", "Événements", construireAVenir(3, "Événements de la guilde") },
-	{ "stats", "Statistiques", construireAVenir(3, "Présence de la guilde") },
-	{ "quetes", "Quêtes", construireAVenir(4, "Quêtes en commun") },
+	{ "demandes", "Demandes", construireDepuis("demandes", "Demandes de la guilde") },
+	{ "artisanat", "Artisanat", construireDepuis("artisanat", "Qui sait fabriquer quoi") },
+	{ "evenements", "Événements", construireDepuis("evenements", "Événements de la guilde") },
+	{ "stats", "Statistiques", construireDepuis("stats", "Présence de la guilde") },
+	{ "quetes", "Quêtes", construireDepuis("quetes", "Quêtes en commun") },
 	{ "options", "Options", construireOptions },
 }
 
@@ -397,6 +489,8 @@ function ns.ouvrir(code)
 	end
 end
 
+ns.montrerPage = function(code) ns.ouvrir(code) end
+
 function ns.basculer()
 	if fenetre and fenetre:IsShown() then fenetre:Hide() else ns.ouvrir() end
 end
@@ -407,6 +501,66 @@ ns.surSignal("profil", function()
 	majAlerteProfil()
 	rafraichirGuilde()
 end)
+
+-- ------------------------------------------------------------------ bulles
+
+-- Une petite annonce en haut de l'écran pendant quelques secondes (et dans la
+-- discussion) ; un clic ouvre la page concernée. Elles passent une par une.
+local DUREE_BULLE = 7
+local bulleCadre, fileBulles, bulleOccupee = nil, {}, false
+ns.bullesRecentes = {}
+
+local function bulleSuivante()
+	local b = table.remove(fileBulles, 1)
+	if not b then
+		bulleOccupee = false
+		if bulleCadre then bulleCadre:Hide() end
+		return
+	end
+	bulleOccupee = true
+	if not bulleCadre then
+		-- BackdropTemplate n'existe pas sur tous les clients : sans lui, une bulle sans cadre
+		local ok, f = pcall(CreateFrame, "Button", "KFireGuildeBulle", UIParent, "BackdropTemplate")
+		if not ok or not f then f = CreateFrame("Button", "KFireGuildeBulle", UIParent) end
+		f:SetSize(420, 44)
+		f:SetPoint("TOP", 0, -140)
+		f:SetFrameStrata("DIALOG")
+		if f.SetBackdrop then
+			f:SetBackdrop({ bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+				edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border", edgeSize = 14,
+				insets = { left = 3, right = 3, top = 3, bottom = 3 } })
+			f:SetBackdropColor(0.05, 0.05, 0.08, 0.92)
+		end
+		local icone = f:CreateTexture(nil, "ARTWORK")
+		icone:SetSize(30, 30)
+		icone:SetPoint("LEFT", 8, 0)
+		icone:SetTexture("Interface\\Icons\\INV_Misc_Tournaments_banner_Human")
+		f.texte = texte(f, "GameFontHighlight", 46, 0, "LEFT")
+		f.texte:SetWidth(360)
+		f:SetScript("OnClick", function(self)
+			if self.page then ns.ouvrir(self.page) end
+			self:Hide()
+		end)
+		bulleCadre = f
+	end
+	bulleCadre.texte:SetText(b.texte)
+	bulleCadre.page = b.page
+	bulleCadre:Show()
+	if PlaySound and SOUNDKIT and SOUNDKIT.TELL_MESSAGE then pcall(PlaySound, SOUNDKIT.TELL_MESSAGE) end
+	ns.apres(DUREE_BULLE, bulleSuivante)
+end
+
+-- page : la page qu'ouvre un clic sur la bulle
+function ns.bulle(texteBulle, page)
+	if ns.db and ns.db.reglages.bullesCoupees then return end
+	table.insert(ns.bullesRecentes, 1, { texte = texteBulle, page = page, date = ns.maintenant() })
+	if #ns.bullesRecentes > 20 then table.remove(ns.bullesRecentes) end
+	ns.dire(texteBulle)
+	-- en combat ou en instance, la discussion suffit
+	if ns.enInstance or (InCombatLockdown and InCombatLockdown()) then return end
+	fileBulles[#fileBulles + 1] = { texte = texteBulle, page = page }
+	if not bulleOccupee then bulleSuivante() end
+end
 
 -- ------------------------------------------------------------------ médaillon
 
@@ -462,6 +616,8 @@ SlashCmdList.KFIREGUILDE = function(arg)
 	elseif cmd == "guilde" then ns.ouvrir("guilde")
 	elseif cmd == "profil" then ns.ouvrirProfil()
 	elseif cmd == "options" then ns.ouvrir("options")
+	elseif cmd == "demandes" or cmd == "artisanat" or cmd == "evenements" or cmd == "stats" or cmd == "quetes" then
+		ns.ouvrir(cmd)
 	elseif cmd == "synchro" then
 		ns.demanderSynchro()
 		ns.dire("synchronisation demandée à la guilde.")
@@ -471,6 +627,6 @@ SlashCmdList.KFIREGUILDE = function(arg)
 		ns.db.reglages.medaillonCache = not ns.db.reglages.medaillonCache
 		ns.majMedaillon()
 	else
-		ns.dire("/ke : la fenêtre ; /ke guilde ; /ke profil ; /ke options ; /ke synchro ; /ke diag ; /ke medaillon")
+		ns.dire("/ke : la fenêtre ; /ke guilde | demandes | artisanat | evenements | stats | quetes | profil | options ; /ke synchro ; /ke diag ; /ke medaillon")
 	end
 end

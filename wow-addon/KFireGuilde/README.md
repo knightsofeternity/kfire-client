@@ -1,6 +1,6 @@
 # KFIRE Guilde (WoW Forever)
 
-Outils de la guilde Knights of Eternity dans WoW Forever. Lot 1 : page Guilde et profils.
+Outils de la guilde Knights of Eternity dans WoW Forever. Lots 1 à 4 : page Guilde et profils, demandes et artisanat, événements et statistiques de présence, quêtes en commun.
 Le cahier des charges est dans [`../docs/kfire-guilde-cahier.md`](../docs/kfire-guilde-cahier.md).
 
 Tout passe par des messages d'add-on invisibles sur le canal de guilde : seuls les membres qui ont
@@ -19,6 +19,11 @@ ceux qui sont connectés.
 |---|---|
 | `/ke` | ouvrir / fermer la fenêtre (`/kfg` marche aussi) |
 | `/ke guilde` | la page Guilde |
+| `/ke demandes` | les demandes de la guilde (publier, prendre, honorer) |
+| `/ke artisanat` | qui sait fabriquer quoi |
+| `/ke evenements` | les événements de guilde, avec l'inscription en un clic |
+| `/ke stats` | la présence de la guilde : semaine type et meilleurs créneaux |
+| `/ke quetes` | les membres en ligne qui font les mêmes quêtes |
 | `/ke profil` | le formulaire de profil (pseudo KFIRE, perso principal, rôle) |
 | `/ke options` | les options et le diagnostic |
 | `/ke synchro` | redemander les fiches à la guilde |
@@ -34,7 +39,15 @@ ceux qui sont connectés.
 | `Magasin.lua` | fiches partagées (la plus récente gagne) et synchro à la connexion |
 | `Profil.lua` | mon profil et la fiche `membres` |
 | `Guilde.lua` | liste de guilde du jeu croisée avec les fiches, filtres et tris |
-| `Interface.lua` | fenêtre, pages, formulaire, médaillon, `/ke` |
+| `Metiers.lua` | métiers et recettes de chacun, « qui sait fabriquer » |
+| `Demandes.lua` | les demandes : publier, prendre, honorer, retirer, bulles |
+| `Evenements.lua` | lecture du calendrier du jeu et réponses |
+| `Presence.lua` | relevé du nombre de membres en ligne, semaine type |
+| `Quetes.lua` | quêtes en cours partagées, quêtes en commun |
+| `Interface.lua` | fenêtre, Accueil, Guilde, Options, formulaire, bulles, médaillon, `/ke` |
+| `PageDemandes.lua` | pages Demandes et Artisanat |
+| `PageEvenements.lua` | pages Événements et Statistiques |
+| `PageQuetes.lua` | page Quêtes |
 
 ## Tests
 

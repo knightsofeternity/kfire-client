@@ -1,6 +1,6 @@
 # Cahier des charges : add-on « KFIRE Guilde » (WoW Forever)
 
-Version du 20/11/2026. Nom provisoire.
+Version du 20/11/2026 (addon 0.2.0, lots 1 à 4 écrits). Nom provisoire.
 
 ## Le besoin
 
@@ -66,9 +66,9 @@ Chaque lot se termine par une recette en jeu à deux joueurs KE.
 | Lot | Contenu | État |
 |---|---|---|
 | **1. Socle + Guilde** | Réseau, fiches et synchro, profil (pseudo, perso principal, rôle), page Guilde, médaillon, `/ke diag` | écrit, testé hors jeu |
-| **2. Demandes + artisanat** | Publier, prendre, honorer, retirer une demande. « Tu en as N » (sacs et banque). Bulle quand un membre publie une demande qu'on peut honorer. Relevé des métiers et des recettes à l'ouverture de la fenêtre de métier. Recherche « qui sait fabriquer X » | à faire |
-| **3. Événements + stats** | Liste des événements de guilde sur 30 jours, avec détail, inscrits, S'inscrire / Peut-être / Se désinscrire. Relevé du nombre de membres en ligne toutes les 10 min, gardé 8 semaines, semaine type et 5 meilleurs créneaux | à faire |
-| **4. Quêtes en commun** | Les quêtes partagées par les membres en ligne, « Inviter », bulle quand un membre qui a la même quête est en ligne | à faire |
+| **2. Demandes + artisanat** | Publier, prendre, honorer, retirer une demande. « Tu en as N » (sacs et banque). Bulle quand un membre publie une demande qu'on peut honorer. Relevé des métiers et des recettes à l'ouverture de la fenêtre de métier. Recherche « qui sait fabriquer X » | écrit, testé hors jeu |
+| **3. Événements + stats** | Liste des événements de guilde sur 30 jours, avec détail, inscrits, S'inscrire / Peut-être / Se désinscrire. Relevé du nombre de membres en ligne toutes les 10 min, gardé 8 semaines, semaine type et 5 meilleurs créneaux | écrit, testé hors jeu |
+| **4. Quêtes en commun** | Les quêtes partagées par les membres en ligne, « Inviter », bulle quand un membre qui a la même quête est en ligne | écrit, testé hors jeu |
 | **5. Liaison KFIRE** | Le client installe et met à jour KFireGuilde. Il lit ce que l'add-on a écrit sur le disque (jeu fermé) et l'envoie au serveur KFIRE : la page Guilde WoW Forever du site, les métiers, la présence. Il propose le pseudo KFIRE au premier lancement | à faire |
 
 ## Recette du lot 1 (deux joueurs KE)
@@ -81,9 +81,31 @@ Chaque lot se termine par une recette en jeu à deux joueurs KE.
 - [ ] Page Guilde : recherche, filtres, tris, clic (chuchoter) et clic droit (inviter).
 - [ ] Aucune erreur Lua (`/ke diag` : « Dernière erreur : aucune »).
 
+## Choix faits pendant l'écriture des lots 2 à 4
+
+- **Modération** : le maître de guilde et les officiers (rangs 0 et 1) peuvent retirer la demande d'un autre. C'est la constante `ns.RANG_MODERATION` dans `Demandes.lua`.
+- **Qui peut agir sur une demande** : un autre membre la prend en charge ; l'auteur ou le preneur la marque honorée ou la relâche ; l'auteur (ou un modérateur) la retire.
+- **Recettes** : notées par l'objet fabriqué (son numéro), ou par le sort pour les enchantements. Elles ne font que s'ajouter, si bien qu'un filtre de la fenêtre de métier n'en fait oublier aucune. Elles repartent de zéro si le niveau du métier baisse (métier oublié puis repris).
+- **Présence** : une fiche par jour, avec le plus grand nombre de membres en ligne pour chaque heure. Deux relevés du même jour se fusionnent. Pour ne pas multiplier les messages, seul le premier membre en ligne avec l'addon (par ordre alphabétique) publie, toutes les 30 minutes.
+- **Quêtes** : seuls comptent les membres en ligne dont la liste a moins de 12 heures. Une bulle par membre et par quête, une seule fois par session.
+- **Bulles** : chacune se coupe dans les Options. En combat ou en instance, seul le message dans la discussion apparaît.
+- **Événements** : rien ne passe par le réseau de l'addon. Le calendrier du jeu est lu (`C_Calendar`) ; « S'inscrire » prend `EventSignUp` pour un événement à inscription, sinon `EventAvailable`. « Se désinscrire » prend `EventDecline`.
+
+## Recette des lots 2 à 4 (deux joueurs KE)
+
+- [ ] A publie une demande d'un objet que B a dans ses sacs : B a une bulle « tu en as N », et la demande est dans son filtre « Pour moi ».
+- [ ] B clique « Je m'en occupe » : A a une bulle. B clique « Honorée » : A a une bulle, et la demande sort des ouvertes.
+- [ ] Maj+clic sur un objet des sacs remplit la case Objet du formulaire.
+- [ ] B ouvre sa fenêtre de métier : chez A, la page Artisanat montre son métier et ses recettes, et la recherche « qui sait fabriquer » le trouve.
+- [ ] Page Événements : les événements de guilde apparaissent sans ouvrir le calendrier ; « S'inscrire » inscrit pour de vrai (à vérifier dans le calendrier du jeu).
+- [ ] Un officier crée un événement : les autres ont une bulle.
+- [ ] Page Statistiques : après quelques heures, la grille se remplit ; `/ke diag` compte les jours de présence.
+- [ ] A et B ont une même quête : chacun a une bulle, la page Quêtes les montre, « Inviter » marche.
+- [ ] Aucune erreur Lua (`/ke diag`).
+
 ## Points ouverts
 
 - Nom définitif de l'add-on et commande (`/ke` est pris par autre chose ?).
-- Les rangs de guilde qui peuvent supprimer la demande d'un autre (modération).
+- La modération (rangs 0 et 1) convient-elle ?
 - Où afficher les données sur le site KFIRE (lot 5) : une page Guilde WoW Forever, ou dans la fiche membre ?
 - Cohabitation avec « Appel d'Alliance » (KE × Cassos) : deux add-ons séparés, ou un onglet de KFIRE Guilde une fois le lot 0 validé ?
