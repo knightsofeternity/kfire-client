@@ -1,6 +1,6 @@
 # Cahier des charges : add-on « KFIRE Guilde » (WoW Forever)
 
-Version du 20/11/2026 (addon 0.2.0, lots 1 à 4 écrits). Nom provisoire.
+Version du 20/11/2026 (addon 0.2.0, lots 1 à 5 écrits). Nom provisoire.
 
 ## Le besoin
 
@@ -69,7 +69,7 @@ Chaque lot se termine par une recette en jeu à deux joueurs KE.
 | **2. Demandes + artisanat** | Publier, prendre, honorer, retirer une demande. « Tu en as N » (sacs et banque). Bulle quand un membre publie une demande qu'on peut honorer. Relevé des métiers et des recettes à l'ouverture de la fenêtre de métier. Recherche « qui sait fabriquer X » | écrit, testé hors jeu |
 | **3. Événements + stats** | Liste des événements de guilde sur 30 jours, avec détail, inscrits, S'inscrire / Peut-être / Se désinscrire. Relevé du nombre de membres en ligne toutes les 10 min, gardé 8 semaines, semaine type et 5 meilleurs créneaux | écrit, testé hors jeu |
 | **4. Quêtes en commun** | Les quêtes partagées par les membres en ligne, « Inviter », bulle quand un membre qui a la même quête est en ligne | écrit, testé hors jeu |
-| **5. Liaison KFIRE** | Le client installe et met à jour KFireGuilde. Il lit ce que l'add-on a écrit sur le disque (jeu fermé) et l'envoie au serveur KFIRE : la page Guilde WoW Forever du site, les métiers, la présence. Il propose le pseudo KFIRE au premier lancement | à faire |
+| **5. Liaison KFIRE** | Le client installe et met à jour KFireGuilde. Il lit ce que l'add-on a écrit sur le disque (jeu fermé) et l'envoie au serveur KFIRE : la page Guilde WoW Forever du site, les métiers, la présence. Il propose le pseudo KFIRE au premier lancement | client écrit et testé ; serveur et page du site sur la branche `feat/wow-guilde` de kfire-server. Contrat : [`kfire-guilde-liaison.md`](kfire-guilde-liaison.md) |
 
 ## Recette du lot 1 (deux joueurs KE)
 

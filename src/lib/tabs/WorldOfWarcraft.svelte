@@ -52,10 +52,25 @@
             {#if e.characters > 0}
               <div class="muted small">{t("wow.characters", { n: e.characters })}</div>
             {/if}
+            {#if e.guild}
+              <div class="muted small">{t("wow.guild.state", { state: t(stateKey[e.guild]) })}</div>
+            {/if}
           {/if}
         </div>
       {/each}
       {#if app.wow.enabled}<p class="muted small">{t("wow.help")}</p>{/if}
+      {#if app.wow.enabled && app.wow.editions.some((e) => e.guild !== null)}
+        <label class="row guild">
+          <input
+            type="checkbox"
+            checked={app.wow.guild_enabled}
+            disabled={app.wowBusy}
+            onchange={(ev) => app.toggleWowGuild(ev.currentTarget.checked)}
+          />
+          <b class="grow">{t("wow.guild.toggle")}</b>
+        </label>
+        <p class="muted small">{t("wow.guild.about")}</p>
+      {/if}
     {/if}
   {/snippet}
 </GameTab>

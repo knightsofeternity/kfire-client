@@ -641,6 +641,16 @@ fn wow_set_enabled(state: tauri::State<'_, AppState>, enabled: bool) -> crate::w
     crate::wow::status(&state.db)
 }
 
+/// Installe ou retire KFIRE Guilde dans WoW Forever, puis renvoie le nouvel état.
+#[tauri::command]
+fn wow_set_guild_enabled(state: tauri::State<'_, AppState>, enabled: bool) -> crate::wow::Status {
+    state
+        .db
+        .set_setting(crate::wow::GUILD_SETTING, if enabled { "1" } else { "0" });
+    crate::wow::sync(&state.db);
+    crate::wow::status(&state.db)
+}
+
 /// Les champs Rocket League qui changent sans que le membre ait rien fait,
 /// donc les seuls qu'il faille sonder.
 ///
@@ -1001,6 +1011,7 @@ pub fn run() {
             rl_live,
             wow_status,
             wow_set_enabled,
+            wow_set_guild_enabled,
             lol_status,
             lol_set_enabled,
             update::check_for_update

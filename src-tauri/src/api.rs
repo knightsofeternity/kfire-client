@@ -275,6 +275,23 @@ impl ApiClient {
         }
     }
 
+    /// The member's KFIRE username (GET /api/v1/users/me).
+    pub async fn fetch_username(&self, access_token: &str) -> Result<String, ApiError> {
+        #[derive(Deserialize)]
+        struct Me {
+            username: String,
+        }
+        let me: Me = Self::handle(
+            self.http
+                .get(format!("{}/api/v1/users/me", self.base_url))
+                .bearer_auth(access_token)
+                .send()
+                .await,
+        )
+        .await?;
+        Ok(me.username)
+    }
+
     pub async fn fetch_games(&self, access_token: &str) -> Result<Vec<CachedGame>, ApiError> {
         #[derive(Deserialize)]
         struct GamesResponse {

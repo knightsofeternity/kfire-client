@@ -164,7 +164,7 @@ local function ouvrirProfil()
 		formulaire = f
 	end
 	local p = ns.monProfil()
-	formulaire.pseudo:SetText(p.pseudo or "")
+	formulaire.pseudo:SetText(p.pseudo or ns.pseudoPropose() or "")
 	formulaire.main:SetText(p.main and ns.prenom(p.main) or "")
 	formulaire.role = p.role
 	for c, rb in pairs(formulaire.roles) do rb:SetAlpha((p.role == nil or c == p.role) and 1 or 0.45) end

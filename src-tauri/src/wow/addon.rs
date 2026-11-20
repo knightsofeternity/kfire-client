@@ -17,10 +17,15 @@ Turn the addon off in KFIRE, or delete this folder, to remove it.\n";
 /// so the game never flags the addon as out of date. Without a number the
 /// bundled multi-version line is kept.
 pub fn toc_for(interface: Option<u32>) -> String {
+    set_interface(TOC, interface)
+}
+
+/// Same, for any TOC (KFIRE Guilde's too).
+pub fn set_interface(toc: &str, interface: Option<u32>) -> String {
     let Some(i) = interface else {
-        return TOC.to_string();
+        return toc.to_string();
     };
-    let mut out: String = TOC
+    let mut out: String = toc
         .lines()
         .map(|l| {
             if l.starts_with("## Interface:") {

@@ -24,6 +24,15 @@ local function nettoyerTexte(t, max)
 	return t
 end
 
+-- Le client KFIRE écrit Propose.lua avec le pseudo KFIRE du membre : il pré-remplit
+-- le formulaire tant que le membre n'a pas choisi le sien.
+function ns.pseudoPropose()
+	local p = type(KFireGuildePropose) == "table" and KFireGuildePropose.pseudo
+	if type(p) ~= "string" then return nil end
+	p = nettoyerTexte(p, PSEUDO_MAX)
+	return p ~= "" and p or nil
+end
+
 function ns.monProfil()
 	local moi = ns.db.moi
 	return {

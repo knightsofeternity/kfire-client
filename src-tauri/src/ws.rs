@@ -323,6 +323,22 @@ impl WsTask {
                 })
                 .unwrap_or(true),
         };
+        // The username, for KFIRE Guilde's profile form: fetched with the catalog,
+        // or once if this server never gave it.
+        let user_key = format!("username:{}", self.server_id);
+        if stale || self.db.get_setting(&user_key).is_none() {
+            match api.fetch_username(access).await {
+                Ok(u) => {
+                    let changed = self.db.get_setting(&user_key).as_deref() != Some(u.as_str());
+                    self.db.set_setting(&user_key, &u);
+                    if changed {
+                        let db = self.db.clone();
+                        std::thread::spawn(move || crate::wow::sync(&db));
+                    }
+                }
+                Err(e) => log::warn!("ws[{}]: username fetch failed: {e}", self.server_id),
+            }
+        }
         if !stale {
             return;
         }

@@ -51,7 +51,23 @@ function ns.lireRoster()
 	end
 	ns.roster = roster
 	ns.rosterDate = ns.maintenant()
+	ns.photographierRoster()
 	ns.signaler("roster")
+end
+
+-- Une photo de la liste sur le disque : le client KFIRE la lit, jeu fermé, pour la
+-- page Guilde du site (lot 5). « vu » est la dernière connexion estimée.
+function ns.photographierRoster()
+	local maintenant = ns.maintenant()
+	local membres = {}
+	for nom, m in pairs(ns.roster) do
+		membres[nom] = {
+			niveau = m.niveau, classe = m.classeFichier, rang = m.rang, rangIndex = m.rangIndex,
+			vu = m.enLigne and maintenant or (m.absentJours and math.floor(maintenant - m.absentJours * 86400)) or nil,
+		}
+	end
+	ns.db.roster = { date = maintenant, guilde = GetGuildInfo and GetGuildInfo("player") or nil,
+		royaume = ns.royaume(), membres = membres }
 end
 
 function ns.estMembre(nom)

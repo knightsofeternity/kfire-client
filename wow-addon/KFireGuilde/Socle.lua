@@ -100,6 +100,7 @@ function ns.preparerDB()
 	db.derniereSynchro = db.derniereSynchro or 0
 	db.noms = db.noms or {}          -- [id d'objet] = nom, pour chercher hors du cache du jeu
 	db.vus = db.vus or {}            -- ce qui a déjà fait l'objet d'une bulle
+	db.version = ns.VERSION          -- pour le client KFIRE, qui lit ce fichier jeu fermé
 	ns.db = db
 	return db
 end

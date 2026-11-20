@@ -19,19 +19,19 @@ pub enum Value {
 }
 
 impl Value {
-    fn get(&self, key: &str) -> Option<&Value> {
+    pub(crate) fn get(&self, key: &str) -> Option<&Value> {
         match self {
             Value::Table(t) => t.get(key),
             _ => None,
         }
     }
-    fn str(&self, key: &str) -> Option<String> {
+    pub(crate) fn str(&self, key: &str) -> Option<String> {
         match self.get(key)? {
             Value::Str(s) => Some(s.clone()),
             _ => None,
         }
     }
-    fn num(&self, key: &str) -> Option<f64> {
+    pub(crate) fn num(&self, key: &str) -> Option<f64> {
         match self.get(key)? {
             Value::Num(n) => Some(*n),
             _ => None,

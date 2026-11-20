@@ -7,7 +7,14 @@ Tout passe par des messages d'add-on invisibles sur le canal de guilde : seuls l
 l'add-on partagent ces informations. Les fiches des membres hors ligne sont gardées et relayées par
 ceux qui sont connectés.
 
-## Installation (en attendant le client KFIRE)
+## Installation
+
+Le client KFIRE l'installe tout seul dans WoW Forever (onglet World of Warcraft, case « KFIRE Guilde dans
+Forever », cochée par défaut), le tient à jour et propose ton pseudo KFIRE dans le profil. Jeu fermé, il
+envoie à KFIRE la liste de la guilde, les profils, les métiers et la présence, avec ton temps de jeu.
+Les demandes et les quêtes restent dans le jeu.
+
+À la main :
 
 1. Copier le dossier `KFireGuilde/` dans `World of Warcraft/_forever_/Interface/AddOns/`.
 2. Lancer le jeu, vérifier que « KFIRE Guilde » est coché dans la liste des add-ons.

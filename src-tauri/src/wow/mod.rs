@@ -3,11 +3,14 @@
 //! /played, and keeps it up to date in every playable edition of the game,
 //! Project Ascension included.
 //!
-//! This version only installs the addon. Reading what it saved and sending it
-//! comes next.
+//! In the Forever editions the client also installs KFIRE Guilde, the guild
+//! addon (`wow-addon/KFireGuilde`), and sends what it saved about the guild
+//! along with the /played.
 
 pub mod addon;
 pub mod buildinfo;
+pub mod guild;
+pub mod guild_addon;
 pub mod install;
 pub mod paths;
 pub mod savedvars;
@@ -20,6 +23,8 @@ pub const SETTING: &str = "wow_addon";
 /// Settings: the last WoW root and Ascension folder found.
 const ROOT_SETTING: &str = "wow_root";
 const ASCENSION_SETTING: &str = "wow_ascension_dir";
+/// Setting: "0" when the member does not want KFIRE Guilde in Forever (on by default).
+pub const GUILD_SETTING: &str = "wow_guild_addon";
 /// Setting: the last sync error, empty when the last sync went fine.
 const ERROR_SETTING: &str = "wow_last_error";
 
@@ -136,6 +141,57 @@ pub struct EditionStatus {
     pub saved_at: Option<String>,
     /// How many characters the addon has recorded in this edition.
     pub characters: usize,
+    /// KFIRE Guilde in this edition (Forever only): same states as `state`.
+    pub guild: Option<String>,
+}
+
+fn state_name(s: install::State) -> &'static str {
+    match s {
+        install::State::Installed => "installed",
+        install::State::Pending => "pending",
+        install::State::Foreign => "foreign",
+        install::State::Off => "off",
+    }
+}
+
+/// The member's KFIRE username, as the first linked server knows it.
+pub fn username(db: &crate::db::Db) -> Option<String> {
+    db.list_servers()
+        .iter()
+        .find_map(|s| db.get_setting(&format!("username:{}", s.id)))
+        .filter(|u| !u.trim().is_empty())
+}
+
+pub fn guild_enabled(db: &crate::db::Db) -> bool {
+    enabled(db) && db.get_setting(GUILD_SETTING).as_deref() != Some("0")
+}
+
+/// Installs (enabled) or removes KFIRE Guilde in the Forever targets.
+pub fn sync_guild_targets(
+    targets: &[(paths::Edition, Option<u32>)],
+    enabled: bool,
+    username: Option<&str>,
+) -> Result<(), String> {
+    let mut first_err = None;
+    for (ed, interface) in targets
+        .iter()
+        .filter(|(ed, _)| guild_addon::is_target(&ed.product))
+    {
+        let dir = guild_addon::addon_dir(&ed.dir);
+        let res = if enabled {
+            install::install_files(&dir, &guild_addon::files(*interface, username))
+        } else {
+            install::uninstall_dir(&dir)
+        };
+        match res {
+            Ok(outcome) => log::info!("wow: guild addon in {} -> {:?}", ed.product, outcome),
+            Err(e) => {
+                log::warn!("wow: guild addon in {} failed: {e}", ed.product);
+                first_err.get_or_insert(format!("KFIRE Guilde, {}: {e}", label(&ed.product)));
+            }
+        }
+    }
+    first_err.map_or(Ok(()), Err)
 }
 
 /// Installs (enabled) or removes (disabled) the addon in every target.
@@ -166,17 +222,22 @@ pub fn sync_targets(
 pub fn status_targets(
     targets: &[(paths::Edition, Option<u32>)],
     enabled: bool,
+    guild: (bool, Option<&str>),
 ) -> Vec<EditionStatus> {
     targets
         .iter()
         .map(|(ed, interface)| {
-            let state = match install::state(&ed.dir, *interface, enabled) {
-                install::State::Installed => "installed",
-                install::State::Pending => "pending",
-                install::State::Foreign => "foreign",
-                install::State::Off => "off",
-            };
+            let state = state_name(install::state(&ed.dir, *interface, enabled));
+            let guild = guild_addon::is_target(&ed.product).then(|| {
+                state_name(install::state_files(
+                    &guild_addon::addon_dir(&ed.dir),
+                    &guild_addon::files(*interface, guild.1),
+                    guild.0,
+                ))
+                .to_string()
+            });
             EditionStatus {
+                guild,
                 product: ed.product.clone(),
                 label: label(&ed.product),
                 dir: ed.dir.to_string_lossy().to_string(),
@@ -206,10 +267,10 @@ pub fn sync(db: &crate::db::Db) {
         log::info!("wow: neither World of Warcraft nor Ascension found");
         return;
     }
-    let err = sync_targets(&targets(root.as_deref(), asc.as_deref()), enabled(db))
-        .err()
-        .unwrap_or_default();
-    db.set_setting(ERROR_SETTING, &err);
+    let t = targets(root.as_deref(), asc.as_deref());
+    let err = sync_targets(&t, enabled(db)).err();
+    let guild_err = sync_guild_targets(&t, guild_enabled(db), username(db).as_deref()).err();
+    db.set_setting(ERROR_SETTING, &err.or(guild_err).unwrap_or_default());
 }
 
 /// What the interface shows.
@@ -217,6 +278,8 @@ pub fn sync(db: &crate::db::Db) {
 pub struct Status {
     pub supported: bool,
     pub enabled: bool,
+    /// KFIRE Guilde wanted in Forever.
+    pub guild_enabled: bool,
     pub root: Option<String>,
     pub ascension: Option<String>,
     pub error: Option<String>,
@@ -230,10 +293,17 @@ pub fn status(db: &crate::db::Db) -> Status {
     } else {
         (None, None)
     };
+    let guild = guild_enabled(db);
+    let user = username(db);
     Status {
         supported: supported(),
         enabled,
-        editions: status_targets(&targets(root.as_deref(), asc.as_deref()), enabled),
+        guild_enabled: guild,
+        editions: status_targets(
+            &targets(root.as_deref(), asc.as_deref()),
+            enabled,
+            (guild, user.as_deref()),
+        ),
         root: root.map(|r| r.to_string_lossy().to_string()),
         ascension: asc.map(|a| a.to_string_lossy().to_string()),
         error: db.get_setting(ERROR_SETTING).filter(|e| !e.is_empty()),
@@ -291,7 +361,7 @@ mod tests {
             "never into a test realm"
         );
 
-        let st = status_targets(&t, true);
+        let st = status_targets(&t, true, (false, None));
         assert_eq!(st.len(), 2);
         assert!(st.iter().all(|e| e.state == "installed"));
         assert_eq!(
@@ -304,7 +374,9 @@ mod tests {
 
         sync_targets(&t, false).unwrap();
         assert!(toc(&root.join("_retail_")).is_none());
-        assert!(status_targets(&t, false).iter().all(|e| e.state == "off"));
+        assert!(status_targets(&t, false, (false, None))
+            .iter()
+            .all(|e| e.state == "off"));
         std::fs::remove_dir_all(root).unwrap();
     }
 
@@ -331,13 +403,71 @@ mod tests {
         assert!(toc(&root.join("_forever_"))
             .unwrap()
             .contains("## Interface: 16001\n"));
-        let st = status_targets(&t, true);
+        let st = status_targets(&t, true, (false, None));
         let forever = st.iter().find(|e| e.product == "wowf").unwrap();
         assert_eq!(
             (forever.label.as_str(), forever.state.as_str()),
             ("Forever", "installed")
         );
         assert_eq!(slug_for("wowf"), Some("world-of-warcraft-forever"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn kfire_guilde_goes_into_forever_only_with_the_username() {
+        let root = fake_root(
+            "guild",
+            &[("_retail_", Some("wow")), ("_forever_", Some("wowf"))],
+        );
+        std::fs::write(
+            root.join(".build.info"),
+            crate::wow::buildinfo::tests::build_info(&[
+                ("12.1.5.70688", "wow"),
+                ("1.60.1.70790", "wowf"),
+            ]),
+        )
+        .unwrap();
+        let t = targets(Some(&root), None);
+        sync_guild_targets(&t, true, Some("Oura")).unwrap();
+        let dir = root.join("_forever_/Interface/AddOns/KFireGuilde");
+        assert!(std::fs::read_to_string(dir.join("KFireGuilde.toc"))
+            .unwrap()
+            .contains("## Interface: 16001\n"));
+        assert!(std::fs::read_to_string(dir.join("Propose.lua"))
+            .unwrap()
+            .contains("pseudo = \"Oura\""));
+        assert!(dir.join("Socle.lua").exists() && dir.join(".kfire").exists());
+        assert!(!root.join("_retail_/Interface/AddOns/KFireGuilde").exists());
+
+        let st = status_targets(&t, true, (true, Some("Oura")));
+        let forever = st.iter().find(|e| e.product == "wowf").unwrap();
+        assert_eq!(forever.guild.as_deref(), Some("installed"));
+        assert!(st
+            .iter()
+            .find(|e| e.product == "wow")
+            .unwrap()
+            .guild
+            .is_none());
+        // a new username rewrites Propose.lua
+        assert_eq!(
+            status_targets(&t, true, (true, Some("Autre")))
+                .iter()
+                .find(|e| e.product == "wowf")
+                .unwrap()
+                .guild
+                .as_deref(),
+            Some("pending")
+        );
+
+        // what the addon saved goes up with the /played
+        let sv = root.join("_forever_/WTF/Account/1#1/SavedVariables");
+        std::fs::create_dir_all(&sv).unwrap();
+        std::fs::write(sv.join(guild::SAVED_FILE), guild::tests::SAVED).unwrap();
+        let g = guild::read(&[root.join("_forever_").as_path()]).unwrap();
+        assert_eq!(g["guild_name"], "Knights of Eternity");
+
+        sync_guild_targets(&t, false, None).unwrap();
+        assert!(!dir.exists());
         std::fs::remove_dir_all(root).unwrap();
     }
 
@@ -359,7 +489,7 @@ mod tests {
         assert_eq!(t.len(), 1);
         sync_targets(&t, true).unwrap();
         assert!(toc(&asc).unwrap().contains("## Interface: 30300\n"));
-        let st = status_targets(&t, true);
+        let st = status_targets(&t, true, (false, None));
         assert_eq!(
             (st[0].label.as_str(), st[0].state.as_str()),
             ("Ascension", "installed")
@@ -463,6 +593,9 @@ mod tests {
 
 // --- Reading and sending what the addon recorded ---------------------------
 
+/// The edition KFIRE Guilde reports to.
+const FOREVER_SLUG: &str = "world-of-warcraft-forever";
+
 /// The catalogue game of an edition, as the servers know it.
 pub fn slug_for(product: &str) -> Option<&'static str> {
     Some(match product {
@@ -560,22 +693,36 @@ pub fn report(db: &crate::db::Db) -> bool {
     let (root, asc) = (root(db), ascension_dir(db));
     let mut by_slug: std::collections::BTreeMap<&str, Vec<savedvars::Character>> =
         Default::default();
+    let mut guild_dirs: Vec<PathBuf> = Vec::new();
     for (ed, _) in targets(root.as_deref(), asc.as_deref()) {
         let Some(slug) = slug_for(&ed.product) else {
             continue;
         };
+        if guild_addon::is_target(&ed.product) {
+            guild_dirs.push(ed.dir.clone());
+        }
         by_slug
             .entry(slug)
             .or_default()
             .extend(read_characters(&ed.dir));
     }
+    let guild = if guild_enabled(db) {
+        guild::read(&guild_dirs.iter().map(PathBuf::as_path).collect::<Vec<_>>())
+    } else {
+        None
+    };
     let mut queued = false;
     let now = chrono::Utc::now().to_rfc3339();
     for (slug, chars) in by_slug {
         if chars.is_empty() {
             continue;
         }
-        let p = payload(slug, &chars);
+        let mut p = payload(slug, &chars);
+        if slug == FOREVER_SLUG {
+            if let Some(g) = &guild {
+                p["guild"] = g.clone();
+            }
+        }
         let fp = fingerprint(&p);
         for server in servers_for(db, slug) {
             let key = format!("wow_played_sent:{server}:{slug}");

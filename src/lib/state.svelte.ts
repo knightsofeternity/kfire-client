@@ -239,6 +239,18 @@ class AppState {
     }
   }
 
+  async toggleWowGuild(next: boolean) {
+    this.wowBusy = true;
+    this.wowError = "";
+    try {
+      this.wow = await invoke<WowStatus>("wow_set_guild_enabled", { enabled: next });
+    } catch (e) {
+      this.wowError = String(e);
+    } finally {
+      this.wowBusy = false;
+    }
+  }
+
   async loadLol() {
     try {
       this.lol = await invoke<LolStatus>("lol_status");

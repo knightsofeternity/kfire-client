@@ -50,13 +50,14 @@ export function install() {
           return { last_mismatch: "", watching: false, socket_connected: false, decoded: 0 };
         case "wow_status":
         case "wow_set_enabled":
+        case "wow_set_guild_enabled":
           return {
-            supported: true, enabled: true, root: "C:\\Program Files (x86)\\World of Warcraft",
+            supported: true, enabled: true, guild_enabled: true, root: "C:\\Program Files (x86)\\World of Warcraft",
             ascension: "C:\\Program Files\\Ascension Launcher\\resources\\ascension-live", error: null,
             editions: [
-              { product: "wow", label: "Retail", dir: "C:\\Program Files (x86)\\World of Warcraft\\_retail_", interface: 120100, state: "installed", saved_at: iso(30), characters: 3 },
-              { product: "wow_classic_beta", label: "Forever", dir: "C:\\Program Files (x86)\\World of Warcraft\\_classic_beta_", interface: 16001, state: "installed", saved_at: null, characters: 0 },
-              { product: "ascension", label: "Ascension", dir: "C:\\Program Files\\Ascension Launcher\\resources\\ascension-live", interface: 30300, state: "pending", saved_at: null, characters: 0 },
+              { product: "wow", label: "Retail", dir: "C:\\Program Files (x86)\\World of Warcraft\\_retail_", interface: 120100, state: "installed", saved_at: iso(30), characters: 3, guild: null },
+              { product: "wow_classic_beta", label: "Forever", dir: "C:\\Program Files (x86)\\World of Warcraft\\_classic_beta_", interface: 16001, state: "installed", saved_at: null, characters: 0, guild: "installed" },
+              { product: "ascension", label: "Ascension", dir: "C:\\Program Files\\Ascension Launcher\\resources\\ascension-live", interface: 30300, state: "pending", saved_at: null, characters: 0, guild: null },
             ],
           };
         case "lol_status":

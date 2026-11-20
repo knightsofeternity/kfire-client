@@ -13,7 +13,7 @@ end
 
 local FICHIERS = {}
 for l in io.lines("KFireGuilde/KFireGuilde.toc") do
-	if l:match("%.lua$") then FICHIERS[#FICHIERS + 1] = "KFireGuilde/" .. l end
+	if l:match("%.lua$") and not l:match("^#") and io.open("KFireGuilde/" .. l) then FICHIERS[#FICHIERS + 1] = "KFireGuilde/" .. l end
 end
 
 -- ------------------------------------------------------------------ le monde
@@ -611,6 +611,20 @@ verifier(#o.ns.bullesRecentes == nb, "pas deux fois la même bulle")
 deconnecter(mk)
 o.ns.lireRoster()
 verifier(#o.ns.quetesEnCommun() == 0, "un membre hors ligne ne compte plus")
+
+-- ------------------------------------------------------------------ lot 5 : ce que lit le client KFIRE
+
+local photo = o.ns.db.roster
+verifier(photo and photo.guilde == "Knights of Eternity" and photo.royaume == "Chogall" and photo.membres["Malkai-Chogall"]
+	and photo.membres["Malkai-Chogall"].classe == "PALADIN" and photo.membres["Sansaddon-Chogall"].vu < W.now - 30 * 86400,
+	"la photo de la liste de guilde est sur le disque (classe, dernière connexion)")
+local prop = joueur("Trayn-Chogall")
+prop.env.KFireGuildePropose = { pseudo = "TraynKF|r" }
+connecter(prop)
+avancer(1)
+verifier(prop.ns.pseudoPropose() == "TraynKFr" and prop.ns.monProfil().pseudo == nil, "le pseudo proposé par le client est lu, sans remplacer le profil")
+prop.ns.ouvrirProfil()
+prop.connecte = false
 
 -- ------------------------------------------------------------------ pages
 

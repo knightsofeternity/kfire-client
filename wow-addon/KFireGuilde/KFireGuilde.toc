@@ -19,3 +19,5 @@ Interface.lua
 PageDemandes.lua
 PageEvenements.lua
 PageQuetes.lua
+# écrit par le client KFIRE (pseudo proposé) ; absent si l'addon est installé à la main
+Propose.lua

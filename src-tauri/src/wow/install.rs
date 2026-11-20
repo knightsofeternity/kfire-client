@@ -23,24 +23,28 @@ pub fn addon_dir(edition: &Path) -> PathBuf {
     edition.join("Interface").join("AddOns").join(addon::FOLDER)
 }
 
-fn files(interface: Option<u32>) -> [(&'static str, String); 3] {
-    [
-        (addon::MARKER, addon::MARKER_TEXT.to_string()),
-        ("KFire.toc", addon::toc_for(interface)),
-        ("KFire.lua", addon::LUA.to_string()),
+fn files(interface: Option<u32>) -> Vec<(String, String)> {
+    vec![
+        (addon::MARKER.to_string(), addon::MARKER_TEXT.to_string()),
+        ("KFire.toc".to_string(), addon::toc_for(interface)),
+        ("KFire.lua".to_string(), addon::LUA.to_string()),
     ]
 }
 
 /// Writes whatever differs. The marker goes first, so an interrupted install
 /// is still recognised as ours next time.
 pub fn install(edition: &Path, interface: Option<u32>) -> std::io::Result<Outcome> {
-    let dir = addon_dir(edition);
+    install_files(&addon_dir(edition), &files(interface))
+}
+
+/// Same, for any of our addon folders and its files (marker first).
+pub fn install_files(dir: &Path, files: &[(String, String)]) -> std::io::Result<Outcome> {
     if dir.exists() && !dir.join(addon::MARKER).exists() {
         return Ok(Outcome::Foreign);
     }
-    std::fs::create_dir_all(&dir)?;
+    std::fs::create_dir_all(dir)?;
     let mut changed = false;
-    for (name, content) in files(interface) {
+    for (name, content) in files {
         let path = dir.join(name);
         if std::fs::read_to_string(&path).ok().as_deref() != Some(content.as_str()) {
             std::fs::write(&path, content)?;
@@ -56,14 +60,17 @@ pub fn install(edition: &Path, interface: Option<u32>) -> std::io::Result<Outcom
 
 /// Deletes our folder, only if it carries our marker.
 pub fn uninstall(edition: &Path) -> std::io::Result<Outcome> {
-    let dir = addon_dir(edition);
+    uninstall_dir(&addon_dir(edition))
+}
+
+pub fn uninstall_dir(dir: &Path) -> std::io::Result<Outcome> {
     if !dir.exists() {
         return Ok(Outcome::Absent);
     }
     if !dir.join(addon::MARKER).exists() {
         return Ok(Outcome::Foreign);
     }
-    std::fs::remove_dir_all(&dir)?;
+    std::fs::remove_dir_all(dir)?;
     Ok(Outcome::Removed)
 }
 
@@ -81,11 +88,14 @@ pub enum State {
 }
 
 pub fn state(edition: &Path, interface: Option<u32>, enabled: bool) -> State {
-    let dir = addon_dir(edition);
+    state_files(&addon_dir(edition), &files(interface), enabled)
+}
+
+pub fn state_files(dir: &Path, files: &[(String, String)], enabled: bool) -> State {
     if dir.exists() && !dir.join(addon::MARKER).exists() {
         return State::Foreign;
     }
-    let current = files(interface).iter().all(|(name, content)| {
+    let current = files.iter().all(|(name, content)| {
         std::fs::read_to_string(dir.join(name)).ok().as_deref() == Some(content.as_str())
     });
     match (enabled, dir.exists(), current) {
@@ -99,11 +109,15 @@ pub fn state(edition: &Path, interface: Option<u32>, enabled: bool) -> State {
 /// The newest `KFire.lua` saved by the game, across every account folder of
 /// this edition: proof that the addon ran and the game wrote its data.
 pub fn saved_at(edition: &Path) -> Option<std::time::SystemTime> {
+    saved_file_at(edition, "KFire.lua")
+}
+
+pub fn saved_file_at(edition: &Path, file: &str) -> Option<std::time::SystemTime> {
     let accounts = std::fs::read_dir(edition.join("WTF").join("Account")).ok()?;
     accounts
         .flatten()
         .filter_map(|a| {
-            std::fs::metadata(a.path().join("SavedVariables").join("KFire.lua"))
+            std::fs::metadata(a.path().join("SavedVariables").join(file))
                 .and_then(|m| m.modified())
                 .ok()
         })
