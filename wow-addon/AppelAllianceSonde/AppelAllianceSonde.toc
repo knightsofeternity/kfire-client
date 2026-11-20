@@ -1,0 +1,8 @@
+## Interface: 16001
+## Title: Appel d'Alliance - sonde (lot 0)
+## Notes: Banc jetable KE × Cassos : vérifie qu'un message passe d'une guilde à l'autre. Même faction uniquement (Alliance). /aa0 pour l'aide.
+## Author: Knights of Eternity
+## Version: 0.0.1
+## SavedVariablesPerCharacter: AppelAllianceSondeDB
+
+AppelAllianceSonde.lua
