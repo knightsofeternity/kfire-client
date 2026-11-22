@@ -10,66 +10,66 @@ use std::path::{Path, PathBuf};
 /// Folder name under `Interface/AddOns`.
 pub const FOLDER: &str = "KFireGuilde";
 
-pub const TOC: &str = include_str!("../../../wow-addon/KFireGuilde/KFireGuilde.toc");
+pub const TOC: &str = include_str!("../../../wow-addon/kfire-guilde/KFireGuilde/KFireGuilde.toc");
 
 /// Every Lua file the TOC loads, except `Propose.lua` which the client writes.
 /// A test checks this list against the TOC.
 pub const LUA: &[(&str, &str)] = &[
     (
         "Socle.lua",
-        include_str!("../../../wow-addon/KFireGuilde/Socle.lua"),
+        include_str!("../../../wow-addon/kfire-guilde/KFireGuilde/Socle.lua"),
     ),
     (
         "Reseau.lua",
-        include_str!("../../../wow-addon/KFireGuilde/Reseau.lua"),
+        include_str!("../../../wow-addon/kfire-guilde/KFireGuilde/Reseau.lua"),
     ),
     (
         "Magasin.lua",
-        include_str!("../../../wow-addon/KFireGuilde/Magasin.lua"),
+        include_str!("../../../wow-addon/kfire-guilde/KFireGuilde/Magasin.lua"),
     ),
     (
         "Profil.lua",
-        include_str!("../../../wow-addon/KFireGuilde/Profil.lua"),
+        include_str!("../../../wow-addon/kfire-guilde/KFireGuilde/Profil.lua"),
     ),
     (
         "Guilde.lua",
-        include_str!("../../../wow-addon/KFireGuilde/Guilde.lua"),
+        include_str!("../../../wow-addon/kfire-guilde/KFireGuilde/Guilde.lua"),
     ),
     (
         "Metiers.lua",
-        include_str!("../../../wow-addon/KFireGuilde/Metiers.lua"),
+        include_str!("../../../wow-addon/kfire-guilde/KFireGuilde/Metiers.lua"),
     ),
     (
         "Demandes.lua",
-        include_str!("../../../wow-addon/KFireGuilde/Demandes.lua"),
+        include_str!("../../../wow-addon/kfire-guilde/KFireGuilde/Demandes.lua"),
     ),
     (
         "Evenements.lua",
-        include_str!("../../../wow-addon/KFireGuilde/Evenements.lua"),
+        include_str!("../../../wow-addon/kfire-guilde/KFireGuilde/Evenements.lua"),
     ),
     (
         "Presence.lua",
-        include_str!("../../../wow-addon/KFireGuilde/Presence.lua"),
+        include_str!("../../../wow-addon/kfire-guilde/KFireGuilde/Presence.lua"),
     ),
     (
         "Quetes.lua",
-        include_str!("../../../wow-addon/KFireGuilde/Quetes.lua"),
+        include_str!("../../../wow-addon/kfire-guilde/KFireGuilde/Quetes.lua"),
     ),
     (
         "Interface.lua",
-        include_str!("../../../wow-addon/KFireGuilde/Interface.lua"),
+        include_str!("../../../wow-addon/kfire-guilde/KFireGuilde/Interface.lua"),
     ),
     (
         "PageDemandes.lua",
-        include_str!("../../../wow-addon/KFireGuilde/PageDemandes.lua"),
+        include_str!("../../../wow-addon/kfire-guilde/KFireGuilde/PageDemandes.lua"),
     ),
     (
         "PageEvenements.lua",
-        include_str!("../../../wow-addon/KFireGuilde/PageEvenements.lua"),
+        include_str!("../../../wow-addon/kfire-guilde/KFireGuilde/PageEvenements.lua"),
     ),
     (
         "PageQuetes.lua",
-        include_str!("../../../wow-addon/KFireGuilde/PageQuetes.lua"),
+        include_str!("../../../wow-addon/kfire-guilde/KFireGuilde/PageQuetes.lua"),
     ),
 ];
 

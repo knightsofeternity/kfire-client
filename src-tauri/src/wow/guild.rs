@@ -1,6 +1,6 @@
 //! Reading what KFIRE Guilde saved (`KFireGuildeDB`), game closed, and turning
 //! it into the `guild` object of the Forever `match_result`. The contract is
-//! `wow-addon/docs/kfire-guilde-liaison.md`.
+//! `wow-addon/kfire-guilde/docs/kfire-guilde-liaison.md` (the wow-kfire-guilde submodule).
 //!
 //! Requests and quests stay in the game; the roster snapshot, the members'
 //! profiles, the professions with their recipes and the hourly presence go up.

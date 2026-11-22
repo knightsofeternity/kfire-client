@@ -14,3 +14,9 @@ updates:
     directory: /
     schedule:
       interval: weekly
+  # KFIRE Guilde lives in knightsofeternity/wow-kfire-guilde: a weekly PR moves
+  # the submodule to its latest commit.
+  - package-ecosystem: gitsubmodule
+    directory: /
+    schedule:
+      interval: weekly

@@ -32,6 +32,9 @@ jobs:
     runs-on: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          # the KFIRE Guilde add-on (wow-addon/kfire-guilde) is embedded at build time
+          submodules: true
 
       - name: Install Linux dependencies
         if: matrix.platform == 'ubuntu-22.04'

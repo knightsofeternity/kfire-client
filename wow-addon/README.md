@@ -19,6 +19,21 @@ docker run --rm -v "$PWD/wow-addon":/w -w /w alpine:3.20 sh -c "apk add -q lua5.
 
 ## KFIRE Guilde (WoW Forever)
 
-Le dossier `KFireGuilde/` est un deuxième add-on, celui des outils de la guilde dans WoW Forever (page Guilde,
-profils, demandes, artisanat, événements, statistiques de présence, quêtes en commun). Voir [`KFireGuilde/README.md`](KFireGuilde/README.md)
-et le cahier des charges [`docs/kfire-guilde-cahier.md`](docs/kfire-guilde-cahier.md). Banc : `lua5.1 test/guilde.lua`.
+Le dossier `kfire-guilde/` est un sous-module : le dépôt
+[knightsofeternity/wow-kfire-guilde](https://github.com/knightsofeternity/wow-kfire-guilde), celui du
+deuxième add-on, les outils de la guilde dans WoW Forever (page Guilde, profils, demandes, artisanat,
+événements, statistiques de présence, quêtes en commun). Le client embarque `kfire-guilde/KFireGuilde/`
+à la compilation : il faut donc cloner avec `git clone --recurse-submodules`, ou lancer
+`git submodule update --init` après coup.
+
+Le cahier des charges, le contrat de liaison et le banc de tests sont dans ce dépôt-là. Pour livrer une
+nouvelle version de l'add-on dans le client : la pousser sur `wow-kfire-guilde`, puis accepter la PR
+Dependabot qui fait avancer le sous-module ici (vérification chaque semaine), ou le faire à la main :
+
+```bash
+git submodule update --remote wow-addon/kfire-guilde
+git add wow-addon/kfire-guilde && git commit -m "chore(wow): bump KFIRE Guilde"
+```
+
+Si la liste des fichiers Lua change, mettre à jour `src-tauri/src/wow/guild_addon.rs` : un test vérifie
+que le TOC et la liste embarquée correspondent.

@@ -1,0 +1,3 @@
+[submodule "wow-addon/kfire-guilde"]
+	path = wow-addon/kfire-guilde
+	url = https://github.com/knightsofeternity/wow-kfire-guilde.git
