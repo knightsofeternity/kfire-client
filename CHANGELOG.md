@@ -7,6 +7,26 @@ Release, so every version MUST have its own section here before it is tagged.
 The release build fails when one is missing, which is deliberate: publishing a
 version under the previous one's notes has already happened once.
 
+## 0.9.0
+
+### Two guild addons for WoW: Forever
+
+The World of Warcraft tab gets two new checkboxes, both on by default. They
+only apply to Forever, and only while the KFire addon itself is on.
+
+- **KFIRE Guilde**, the Knights of Eternity guild addon: guild page and
+  profiles, requests and crafting, events and presence stats, shared quests.
+  Type `/ke` in game. The client offers your KFIRE username as your in-game
+  pseudo, and sends your guild's roster, profiles, professions and presence
+  to KFIRE with your time played.
+- **Appel d'Alliance**, the group calls shared with Les Cassos de la Lumière,
+  Alliance only: every group request becomes a sound and a small window with
+  an "Interested" button. Type `/alliance` in game. Nothing leaves the game.
+
+The client installs both addons and keeps them up to date. A copy you
+installed yourself is never touched: delete its folder, game closed, to hand
+it over to KFIRE.
+
 ## 0.8.2
 
 ### World of Warcraft: Forever gets the addon
