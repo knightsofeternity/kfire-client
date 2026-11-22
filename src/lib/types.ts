@@ -60,12 +60,16 @@ export type WowEdition = {
   characters: number;
   /** KFIRE Guilde (Forever editions only), same states as `state`. */
   guild: "installed" | "pending" | "foreign" | "off" | null;
+  /** Appel d'Alliance (Forever editions only), same states as `state`. */
+  alliance: "installed" | "pending" | "foreign" | "off" | null;
 };
 export type WowStatus = {
   supported: boolean;
   enabled: boolean;
   /** KFIRE Guilde wanted in Forever. */
   guild_enabled: boolean;
+  /** Appel d'Alliance wanted in Forever. */
+  alliance_enabled: boolean;
   root: string | null;
   ascension: string | null;
   error: string | null;

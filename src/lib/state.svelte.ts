@@ -251,6 +251,18 @@ class AppState {
     }
   }
 
+  async toggleWowAlliance(next: boolean) {
+    this.wowBusy = true;
+    this.wowError = "";
+    try {
+      this.wow = await invoke<WowStatus>("wow_set_alliance_enabled", { enabled: next });
+    } catch (e) {
+      this.wowError = String(e);
+    } finally {
+      this.wowBusy = false;
+    }
+  }
+
   async loadLol() {
     try {
       this.lol = await invoke<LolStatus>("lol_status");

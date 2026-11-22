@@ -55,6 +55,9 @@
             {#if e.guild}
               <div class="muted small">{t("wow.guild.state", { state: t(stateKey[e.guild]) })}</div>
             {/if}
+            {#if e.alliance}
+              <div class="muted small">{t("wow.alliance.state", { state: t(stateKey[e.alliance]) })}</div>
+            {/if}
           {/if}
         </div>
       {/each}
@@ -70,6 +73,19 @@
           <b class="grow">{t("wow.guild.toggle")}</b>
         </label>
         <p class="muted small">{t("wow.guild.about")}</p>
+        <label class="row guild">
+          <input
+            type="checkbox"
+            checked={app.wow.alliance_enabled}
+            disabled={app.wowBusy}
+            onchange={(ev) => app.toggleWowAlliance(ev.currentTarget.checked)}
+          />
+          <b class="grow">{t("wow.alliance.toggle")}</b>
+        </label>
+        <p class="muted small">{t("wow.alliance.about")}</p>
+        {#if app.wow.editions.some((e) => e.alliance === "foreign")}
+          <p class="warning">{t("wow.alliance.foreign")}</p>
+        {/if}
       {/if}
     {/if}
   {/snippet}

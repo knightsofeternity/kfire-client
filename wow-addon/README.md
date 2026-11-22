@@ -37,3 +37,13 @@ git add wow-addon/kfire-guilde && git commit -m "chore(wow): bump KFIRE Guilde"
 
 Si la liste des fichiers Lua change, mettre à jour `src-tauri/src/wow/guild_addon.rs` : un test vérifie
 que le TOC et la liste embarquée correspondent.
+
+## Appel d'Alliance (WoW Forever)
+
+`appel-alliance/` est un deuxième sous-module : le dépôt
+[knightsofeternity/wow-appel-alliance](https://github.com/knightsofeternity/wow-appel-alliance),
+l'appel de groupe partagé avec Les Cassos de la Lumière. Le client embarque `appel-alliance/AppelAlliance/`
+et l'installe dans Forever, case « Appel d'Alliance » de l'onglet World of Warcraft. Les Cassos, qui n'ont
+pas KFIRE, l'installent à la main avec le zip. Mise à jour : comme KFIRE Guilde, par la PR Dependabot ou
+`git submodule update --remote wow-addon/appel-alliance`. Un test vérifie que le TOC et
+`src-tauri/src/wow/alliance_addon.rs` listent les mêmes fichiers.

@@ -5,9 +5,11 @@
 //!
 //! In the Forever editions the client also installs KFIRE Guilde, the guild
 //! addon (`wow-addon/KFireGuilde`), and sends what it saved about the guild
-//! along with the /played.
+//! along with the /played, and Appel d'Alliance, the group call addon shared
+//! with Les Cassos de la Lumière (`wow-addon/appel-alliance`).
 
 pub mod addon;
+pub mod alliance_addon;
 pub mod buildinfo;
 pub mod guild;
 pub mod guild_addon;
@@ -25,6 +27,8 @@ const ROOT_SETTING: &str = "wow_root";
 const ASCENSION_SETTING: &str = "wow_ascension_dir";
 /// Setting: "0" when the member does not want KFIRE Guilde in Forever (on by default).
 pub const GUILD_SETTING: &str = "wow_guild_addon";
+/// Setting: "0" when the member does not want Appel d'Alliance in Forever (on by default).
+pub const ALLIANCE_SETTING: &str = "wow_alliance_addon";
 /// Setting: the last sync error, empty when the last sync went fine.
 const ERROR_SETTING: &str = "wow_last_error";
 
@@ -143,6 +147,8 @@ pub struct EditionStatus {
     pub characters: usize,
     /// KFIRE Guilde in this edition (Forever only): same states as `state`.
     pub guild: Option<String>,
+    /// Appel d'Alliance in this edition (Forever only): same states as `state`.
+    pub alliance: Option<String>,
 }
 
 fn state_name(s: install::State) -> &'static str {
@@ -164,6 +170,37 @@ pub fn username(db: &crate::db::Db) -> Option<String> {
 
 pub fn guild_enabled(db: &crate::db::Db) -> bool {
     enabled(db) && db.get_setting(GUILD_SETTING).as_deref() != Some("0")
+}
+
+pub fn alliance_enabled(db: &crate::db::Db) -> bool {
+    enabled(db) && db.get_setting(ALLIANCE_SETTING).as_deref() != Some("0")
+}
+
+/// Installs (enabled) or removes Appel d'Alliance in the Forever targets.
+pub fn sync_alliance_targets(
+    targets: &[(paths::Edition, Option<u32>)],
+    enabled: bool,
+) -> Result<(), String> {
+    let mut first_err = None;
+    for (ed, interface) in targets
+        .iter()
+        .filter(|(ed, _)| alliance_addon::is_target(&ed.product))
+    {
+        let dir = alliance_addon::addon_dir(&ed.dir);
+        let res = if enabled {
+            install::install_files(&dir, &alliance_addon::files(*interface))
+        } else {
+            install::uninstall_dir(&dir)
+        };
+        match res {
+            Ok(outcome) => log::info!("wow: alliance addon in {} -> {:?}", ed.product, outcome),
+            Err(e) => {
+                log::warn!("wow: alliance addon in {} failed: {e}", ed.product);
+                first_err.get_or_insert(format!("Appel d'Alliance, {}: {e}", label(&ed.product)));
+            }
+        }
+    }
+    first_err.map_or(Ok(()), Err)
 }
 
 /// Installs (enabled) or removes KFIRE Guilde in the Forever targets.
@@ -223,6 +260,7 @@ pub fn status_targets(
     targets: &[(paths::Edition, Option<u32>)],
     enabled: bool,
     guild: (bool, Option<&str>),
+    alliance: bool,
 ) -> Vec<EditionStatus> {
     targets
         .iter()
@@ -236,8 +274,17 @@ pub fn status_targets(
                 ))
                 .to_string()
             });
+            let alliance = alliance_addon::is_target(&ed.product).then(|| {
+                state_name(install::state_files(
+                    &alliance_addon::addon_dir(&ed.dir),
+                    &alliance_addon::files(*interface),
+                    alliance,
+                ))
+                .to_string()
+            });
             EditionStatus {
                 guild,
+                alliance,
                 product: ed.product.clone(),
                 label: label(&ed.product),
                 dir: ed.dir.to_string_lossy().to_string(),
@@ -270,7 +317,11 @@ pub fn sync(db: &crate::db::Db) {
     let t = targets(root.as_deref(), asc.as_deref());
     let err = sync_targets(&t, enabled(db)).err();
     let guild_err = sync_guild_targets(&t, guild_enabled(db), username(db).as_deref()).err();
-    db.set_setting(ERROR_SETTING, &err.or(guild_err).unwrap_or_default());
+    let alliance_err = sync_alliance_targets(&t, alliance_enabled(db)).err();
+    db.set_setting(
+        ERROR_SETTING,
+        &err.or(guild_err).or(alliance_err).unwrap_or_default(),
+    );
 }
 
 /// What the interface shows.
@@ -280,6 +331,8 @@ pub struct Status {
     pub enabled: bool,
     /// KFIRE Guilde wanted in Forever.
     pub guild_enabled: bool,
+    /// Appel d'Alliance wanted in Forever.
+    pub alliance_enabled: bool,
     pub root: Option<String>,
     pub ascension: Option<String>,
     pub error: Option<String>,
@@ -294,15 +347,18 @@ pub fn status(db: &crate::db::Db) -> Status {
         (None, None)
     };
     let guild = guild_enabled(db);
+    let alliance = alliance_enabled(db);
     let user = username(db);
     Status {
         supported: supported(),
         enabled,
         guild_enabled: guild,
+        alliance_enabled: alliance,
         editions: status_targets(
             &targets(root.as_deref(), asc.as_deref()),
             enabled,
             (guild, user.as_deref()),
+            alliance,
         ),
         root: root.map(|r| r.to_string_lossy().to_string()),
         ascension: asc.map(|a| a.to_string_lossy().to_string()),
@@ -361,7 +417,7 @@ mod tests {
             "never into a test realm"
         );
 
-        let st = status_targets(&t, true, (false, None));
+        let st = status_targets(&t, true, (false, None), false);
         assert_eq!(st.len(), 2);
         assert!(st.iter().all(|e| e.state == "installed"));
         assert_eq!(
@@ -374,7 +430,7 @@ mod tests {
 
         sync_targets(&t, false).unwrap();
         assert!(toc(&root.join("_retail_")).is_none());
-        assert!(status_targets(&t, false, (false, None))
+        assert!(status_targets(&t, false, (false, None), false)
             .iter()
             .all(|e| e.state == "off"));
         std::fs::remove_dir_all(root).unwrap();
@@ -403,7 +459,7 @@ mod tests {
         assert!(toc(&root.join("_forever_"))
             .unwrap()
             .contains("## Interface: 16001\n"));
-        let st = status_targets(&t, true, (false, None));
+        let st = status_targets(&t, true, (false, None), false);
         let forever = st.iter().find(|e| e.product == "wowf").unwrap();
         assert_eq!(
             (forever.label.as_str(), forever.state.as_str()),
@@ -439,7 +495,7 @@ mod tests {
         assert!(dir.join("Socle.lua").exists() && dir.join(".kfire").exists());
         assert!(!root.join("_retail_/Interface/AddOns/KFireGuilde").exists());
 
-        let st = status_targets(&t, true, (true, Some("Oura")));
+        let st = status_targets(&t, true, (true, Some("Oura")), false);
         let forever = st.iter().find(|e| e.product == "wowf").unwrap();
         assert_eq!(forever.guild.as_deref(), Some("installed"));
         assert!(st
@@ -450,7 +506,7 @@ mod tests {
             .is_none());
         // a new username rewrites Propose.lua
         assert_eq!(
-            status_targets(&t, true, (true, Some("Autre")))
+            status_targets(&t, true, (true, Some("Autre")), false)
                 .iter()
                 .find(|e| e.product == "wowf")
                 .unwrap()
@@ -472,6 +528,61 @@ mod tests {
     }
 
     #[test]
+    fn appel_d_alliance_goes_into_forever_only() {
+        let root = fake_root(
+            "alliance",
+            &[("_retail_", Some("wow")), ("_forever_", Some("wowf"))],
+        );
+        std::fs::write(
+            root.join(".build.info"),
+            crate::wow::buildinfo::tests::build_info(&[
+                ("12.1.5.70688", "wow"),
+                ("1.60.1.70790", "wowf"),
+            ]),
+        )
+        .unwrap();
+        let t = targets(Some(&root), None);
+        sync_alliance_targets(&t, true).unwrap();
+        let dir = root.join("_forever_/Interface/AddOns/AppelAlliance");
+        assert!(std::fs::read_to_string(dir.join("AppelAlliance.toc"))
+            .unwrap()
+            .contains("## Interface: 16001\n"));
+        assert!(dir.join("Config.lua").exists() && dir.join(".kfire").exists());
+        assert!(!root
+            .join("_retail_/Interface/AddOns/AppelAlliance")
+            .exists());
+
+        let st = status_targets(&t, true, (false, None), true);
+        let forever = st.iter().find(|e| e.product == "wowf").unwrap();
+        assert_eq!(forever.alliance.as_deref(), Some("installed"));
+        assert!(st
+            .iter()
+            .find(|e| e.product == "wow")
+            .unwrap()
+            .alliance
+            .is_none());
+
+        sync_alliance_targets(&t, false).unwrap();
+        assert!(!dir.exists());
+
+        // a copy installed by hand from the zip is never touched
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("AppelAlliance.toc"), "## Interface: 16001\n").unwrap();
+        sync_alliance_targets(&t, true).unwrap();
+        assert!(!dir.join(".kfire").exists());
+        let st = status_targets(&t, true, (false, None), true);
+        assert_eq!(
+            st.iter()
+                .find(|e| e.product == "wowf")
+                .unwrap()
+                .alliance
+                .as_deref(),
+            Some("foreign")
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn released_forever_is_found_without_flavor_info() {
         let root = fake_root("forever-noflavor", &[("_forever_", None)]);
         let eds = paths::editions(&root);
@@ -489,7 +600,7 @@ mod tests {
         assert_eq!(t.len(), 1);
         sync_targets(&t, true).unwrap();
         assert!(toc(&asc).unwrap().contains("## Interface: 30300\n"));
-        let st = status_targets(&t, true, (false, None));
+        let st = status_targets(&t, true, (false, None), false);
         assert_eq!(
             (st[0].label.as_str(), st[0].state.as_str()),
             ("Ascension", "installed")
