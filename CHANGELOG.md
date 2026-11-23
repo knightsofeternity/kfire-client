@@ -7,6 +7,23 @@ Release, so every version MUST have its own section here before it is tagged.
 The release build fails when one is missing, which is deliberate: publishing a
 version under the previous one's notes has already happened once.
 
+## 0.9.1
+
+### KFIRE now updates itself
+
+- **Automatic updates.** A minute after it starts, then every 6 hours while
+  it stays open, the client checks for a new version, downloads it, checks its
+  signature, installs it and restarts. It never does this in the middle of a
+  game: it waits until the game is closed. On Windows a small progress window
+  shows up for a few seconds.
+- **This is the last version to install by hand.** Clients older than 0.9.1
+  cannot update themselves: download this one once, the next ones will come
+  on their own.
+- On Linux, only the AppImage updates itself. The .deb and .rpm packages keep
+  showing a link to the new version, as before.
+- The "up to date" notice in the footer no longer stays stale for hours when
+  a new version comes out while KFIRE is open.
+
 ## 0.9.0
 
 ### Two guild addons for WoW: Forever

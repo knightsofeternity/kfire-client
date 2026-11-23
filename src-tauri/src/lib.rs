@@ -1,4 +1,5 @@
 pub mod api;
+pub mod autoupdate;
 pub mod db;
 pub mod hs;
 pub mod lol;
@@ -999,6 +1000,7 @@ pub fn run() {
                 .build(),
         )
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             None,
@@ -1049,6 +1051,8 @@ pub fn run() {
             scanner_state.reload_ignored(&db.list_ignored());
             let (event_tx, mut event_rx) = mpsc::unbounded_channel();
             scanner::spawn(scanner_state.clone(), event_tx.clone());
+            // Self-update: checks GitHub a minute after start, then every 6 h.
+            autoupdate::spawn(app.handle().clone(), scanner_state.clone());
 
             // Last WS status per server, shared with the notification loop.
             let conn_status: Arc<Mutex<HashMap<String, String>>> =

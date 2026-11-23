@@ -18,7 +18,9 @@ const LATEST_API: &str =
     "https://api.github.com/repos/knightsofeternity/kfire-client/releases/latest";
 
 /// How long a successful check stays fresh (no re-fetch within this window).
-const TTL_OK: Duration = Duration::from_secs(6 * 60 * 60); // 6h
+/// It used to be 6 h: a client left open across a release kept saying
+/// "up to date" all evening. 30 min is still one GET per half hour at most.
+const TTL_OK: Duration = Duration::from_secs(30 * 60); // 30min
 /// A failed check (offline, rate-limited) is retried sooner, but not spammed.
 const TTL_ERR: Duration = Duration::from_secs(30 * 60); // 30min
 /// Network timeout for the single request.
