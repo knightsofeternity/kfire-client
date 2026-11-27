@@ -70,3 +70,33 @@ jobs:
       - name: cargo test
         working-directory: src-tauri
         run: cargo test
+
+  windows:
+    name: Rust tests (Windows)
+    # Runner de l'equipe (MENELTARMA) : verifie a chaque PR la chaine de
+    # construction Windows dont depend la release (MSVC, Rust, pnpm).
+    runs-on: [self-hosted, ke-windows]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: true
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10.20.0
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+
+      - name: cargo test
+        working-directory: src-tauri
+        run: cargo test

@@ -25,11 +25,14 @@ jobs:
           - platform: ubuntu-22.04
             args: ''
             rust-targets: ''
+          # Windows se construit sur le runner de l'equipe (MENELTARMA) : les
+          # minutes Windows de GitHub comptent double et le forfait gratuit est epuise.
           - platform: windows-latest
+            runner: '["self-hosted", "ke-windows"]'
             args: ''
             rust-targets: ''
 
-    runs-on: ${{ matrix.platform }}
+    runs-on: ${{ matrix.runner && fromJSON(matrix.runner) || matrix.platform }}
     steps:
       - uses: actions/checkout@v7
         with:
